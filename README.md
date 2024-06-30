@@ -16,10 +16,10 @@
 </a>
 </p>
 
-# Jobs Redis Interface
+# Redis driver for Jobs
 
 Redis is an open source, in-memory data structure store, used as a database, cache, and message broker.
 
 ## Documentation
 
-Reference documentation for HummingbirdRedis can be found [here](https://docs.hummingbird.codes/2.0/documentation/hummingbirdredis)
+Reference documentation for HummingbirdRedis can be found [here](https://docs.hummingbird.codes/2.0/documentation/jobsredis)
