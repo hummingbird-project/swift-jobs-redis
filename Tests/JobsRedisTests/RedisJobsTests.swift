@@ -207,7 +207,7 @@ final class RedisJobsTests: XCTestCase {
     func testShutdownJob() async throws {
         let jobIdentifer = JobIdentifier<Int>(#function)
         let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 1)
-        var logger = Logger(label: "HummingbirdJobsTests")
+        var logger = Logger(label: "JobsTests")
         logger.logLevel = .trace
 
         try await self.testJobQueue(numWorkers: 4) { jobQueue in
@@ -289,7 +289,7 @@ final class RedisJobsTests: XCTestCase {
         let jobIdentifer = JobIdentifier<Int>(#function)
         let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 200)
         let logger = {
-            var logger = Logger(label: "HummingbirdJobsTests")
+            var logger = Logger(label: "JobsTests")
             logger.logLevel = .debug
             return logger
         }()
