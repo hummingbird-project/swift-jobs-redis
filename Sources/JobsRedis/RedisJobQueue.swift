@@ -13,8 +13,8 @@
 //===----------------------------------------------------------------------===//
 
 import Atomics
-import struct Foundation.Date
 import struct Foundation.Data
+import struct Foundation.Date
 import class Foundation.JSONDecoder
 import struct Foundation.UUID
 import Jobs
