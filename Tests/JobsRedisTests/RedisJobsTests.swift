@@ -2,7 +2,7 @@
 //
 // This source file is part of the Hummingbird server framework project
 //
-// Copyright (c) 2021-2021 the Hummingbird authors
+// Copyright (c) 2021-2024 the Hummingbird authors
 // Licensed under Apache License v2.0
 //
 // See LICENSE.txt for license information
@@ -298,6 +298,7 @@ final class RedisJobsTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(Int.random(in: 10..<50)))
             expectation.fulfill()
         }
+
         let redis = try createRedisConnectionPool(logger: logger)
         let redisService = RedisConnectionPoolService(redis)
         let jobQueue = JobQueue(

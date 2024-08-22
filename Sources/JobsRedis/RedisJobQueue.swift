@@ -2,7 +2,7 @@
 //
 // This source file is part of the Hummingbird server framework project
 //
-// Copyright (c) 2021-2021 the Hummingbird authors
+// Copyright (c) 2021-2024 the Hummingbird authors
 // Licensed under Apache License v2.0
 //
 // See LICENSE.txt for license information
@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 import Atomics
+import struct Foundation.Date
 import struct Foundation.Data
 import class Foundation.JSONDecoder
 import struct Foundation.UUID
@@ -141,7 +142,7 @@ public final class RedisJobQueue: JobQueueDriver {
         }
         let identifier = JobID(key)
         if let buffer = try await self.get(jobId: identifier) {
-            return .init(id: identifier, jobBuffer: buffer)
+            return .init(id: identifier, jobBuffer: buffer, queuedAt: Date.now)
         } else {
             throw RedisQueueError.jobMissing(identifier)
         }
