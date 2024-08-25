@@ -127,6 +127,21 @@ public final class RedisJobQueue: JobQueueDriver {
 
     public func shutdownGracefully() async {}
 
+    /// Get job queue metadata
+    /// - Parameter key: Metadata key
+    /// - Returns: Associated ByteBuffer
+    public func getMetadata(_ key: String) async throws -> ByteBuffer? {
+        return try await self.redisConnectionPool.wrappedValue.get(.init(key)).get().byteBuffer
+    }
+
+    /// Set job queue metadata
+    /// - Parameters:
+    ///   - key: Metadata key
+    ///   - value: Associated ByteBuffer
+    public func setMetadata(key: String, value: ByteBuffer) async throws {
+        try await self.redisConnectionPool.wrappedValue.set(.init(key), to: value).get()
+    }
+
     /// Pop Job off queue and add to pending queue
     /// - Parameter eventLoop: eventLoop to do work on
     /// - Returns: queued job
@@ -189,7 +204,7 @@ public final class RedisJobQueue: JobQueueDriver {
     }
 
     func set(jobId: JobID, buffer: ByteBuffer) async throws {
-        return try await self.redisConnectionPool.wrappedValue.set(jobId.redisKey, to: buffer).get()
+        try await self.redisConnectionPool.wrappedValue.set(jobId.redisKey, to: buffer).get()
     }
 
     func delete(jobId: JobID) async throws {
