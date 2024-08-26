@@ -337,6 +337,19 @@ final class RedisJobsTests: XCTestCase {
             }
         }
     }
+
+    func testMetadata() async throws {
+        let redis = try createRedisConnectionPool(logger: Logger(label: "Jobs"))
+        let jobQueue = RedisJobQueue(redis)
+        let value = ByteBuffer(string: "Testing metadata")
+        try await jobQueue.setMetadata(key: "test", value: value)
+        let metadata = try await jobQueue.getMetadata("test")
+        XCTAssertEqual(metadata, value)
+        let value2 = ByteBuffer(string: "Testing metadata again")
+        try await jobQueue.setMetadata(key: "test", value: value2)
+        let metadata2 = try await jobQueue.getMetadata("test")
+        XCTAssertEqual(metadata2, value2)
+    }
 }
 
 struct RedisConnectionPoolService: Service {
