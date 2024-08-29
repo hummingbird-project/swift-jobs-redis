@@ -32,14 +32,6 @@ extension XCTestExpectation {
 }
 
 final class RedisJobsTests: XCTestCase {
-    func wait(for expectations: [XCTestExpectation], timeout: TimeInterval) async {
-        #if (os(Linux) && swift(<5.9)) || swift(<5.8)
-        super.wait(for: expectations, timeout: timeout)
-        #else
-        await fulfillment(of: expectations, timeout: timeout)
-        #endif
-    }
-
     static let redisHostname = ProcessInfo.processInfo.environment["REDIS_HOSTNAME"] ?? "localhost"
 
     func createRedisConnectionPool(logger: Logger) throws -> RedisConnectionPool {
@@ -122,7 +114,7 @@ final class RedisJobsTests: XCTestCase {
             try await jobQueue.push(id: jobIdentifer, parameters: 9)
             try await jobQueue.push(id: jobIdentifer, parameters: 10)
 
-            await self.wait(for: [expectation], timeout: 5)
+            await self.fulfillment(of: [expectation], timeout: 5)
         }
     }
 
@@ -155,7 +147,7 @@ final class RedisJobsTests: XCTestCase {
             try await jobQueue.push(id: jobIdentifer, parameters: 9)
             try await jobQueue.push(id: jobIdentifer, parameters: 10)
 
-            await self.wait(for: [expectation], timeout: 5)
+            await self.fulfillment(of: [expectation], timeout: 5)
 
             XCTAssertGreaterThan(maxRunningJobCounter.load(ordering: .relaxed), 1)
             XCTAssertLessThanOrEqual(maxRunningJobCounter.load(ordering: .relaxed), 4)
@@ -173,7 +165,7 @@ final class RedisJobsTests: XCTestCase {
             }
             try await jobQueue.push(id: jobIdentifer, parameters: 0)
 
-            await self.wait(for: [expectation], timeout: 5)
+            await self.fulfillment(of: [expectation], timeout: 5)
             try await Task.sleep(for: .milliseconds(200))
 
             let failedJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.failedQueueKey).get()
@@ -199,7 +191,7 @@ final class RedisJobsTests: XCTestCase {
             }
             try await jobQueue.push(id: jobIdentifer, parameters: .init(id: 23, message: "Hello!"))
 
-            await self.wait(for: [expectation], timeout: 5)
+            await self.fulfillment(of: [expectation], timeout: 5)
         }
     }
 
@@ -216,7 +208,7 @@ final class RedisJobsTests: XCTestCase {
                 try await Task.sleep(for: .milliseconds(1000))
             }
             try await jobQueue.push(id: jobIdentifer, parameters: 0)
-            await self.wait(for: [expectation], timeout: 5)
+            await self.fulfillment(of: [expectation], timeout: 5)
 
             let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.queueKey).get()
             XCTAssertEqual(pendingJobs, 0)
@@ -240,7 +232,7 @@ final class RedisJobsTests: XCTestCase {
             }
             try await jobQueue.push(id: jobIdentifer1, parameters: 2)
             try await jobQueue.push(id: jobIdentifer2, parameters: "test")
-            await self.wait(for: [expectation], timeout: 5)
+            await self.fulfillment(of: [expectation], timeout: 5)
         }
         string.withLockedValue {
             XCTAssertEqual($0, "test")
@@ -269,7 +261,7 @@ final class RedisJobsTests: XCTestCase {
 
             try await jobQueue.push(id: jobIdentifer, parameters: 0)
 
-            await self.wait(for: [failedExpectation], timeout: 10)
+            await self.fulfillment(of: [failedExpectation], timeout: 10)
 
             // stall to give job chance to start running
             try await Task.sleep(for: .milliseconds(50))
@@ -280,7 +272,7 @@ final class RedisJobsTests: XCTestCase {
 
         try await self.testJobQueue(numWorkers: 4, failedJobsInitialization: .rerun) { jobQueue in
             jobQueue.registerJob(job)
-            await self.wait(for: [succeededExpectation], timeout: 10)
+            await self.fulfillment(of: [succeededExpectation], timeout: 10)
             XCTAssertTrue(finished.load(ordering: .relaxed))
         }
     }
@@ -328,7 +320,7 @@ final class RedisJobsTests: XCTestCase {
                 for i in 0..<200 {
                     try await jobQueue.push(id: jobIdentifer, parameters: i)
                 }
-                await self.wait(for: [expectation], timeout: 5)
+                await self.fulfillment(of: [expectation], timeout: 5)
                 await serviceGroup.triggerGracefulShutdown()
             } catch {
                 XCTFail("\(String(reflecting: error))")
