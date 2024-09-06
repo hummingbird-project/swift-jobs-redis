@@ -195,6 +195,34 @@ final class RedisJobsTests: XCTestCase {
         }
     }
 
+    func testDelayedJob() async throws {
+        let jobIdentifer = JobIdentifier<Int>(#function)
+        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 2)
+        let jobExecutionSequence: NIOLockedValueBox<[Int]> = .init([])
+        try await self.testJobQueue(numWorkers: 1) { jobQueue in
+            jobQueue.registerJob(id: jobIdentifer) { parameters, _ in
+                jobExecutionSequence.withLockedValue {
+                    $0.append(parameters)
+                }
+                expectation.fulfill()
+                try await Task.sleep(for: .milliseconds(1000))
+            }
+            try await jobQueue.push(
+                id: jobIdentifer,
+                parameters: 100,
+                options: .init(delayUntil: Date.now.addingTimeInterval(1))
+            )
+            try await jobQueue.push(
+                id: jobIdentifer,
+                parameters: 50
+            )
+            await self.fulfillment(of: [expectation], timeout: 20)
+        }
+        jobExecutionSequence.withLockedValue {
+            XCTAssertEqual($0, [50, 100])
+        }
+    }
+
     /// Test job is cancelled on shutdown
     func testShutdownJob() async throws {
         let jobIdentifer = JobIdentifier<Int>(#function)

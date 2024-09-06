@@ -26,6 +26,8 @@ extension RedisJobQueue {
     /// Redis Job queue configuration
     public struct Configuration: Sendable {
         let queueKey: RedisKey
+        let delayedQueueKey: RedisKey
+        let delayedZSetKey: RedisKey
         let processingQueueKey: RedisKey
         let failedQueueKey: RedisKey
         let pendingJobInitialization: JobInitialization
@@ -47,6 +49,8 @@ extension RedisJobQueue {
             self.pendingJobInitialization = pendingJobInitialization
             self.processingJobsInitialization = processingJobsInitialization
             self.failedJobsInitialization = failedJobsInitialization
+            self.delayedQueueKey = RedisKey("\(queueKey)Delayed")
+            self.delayedZSetKey = RedisKey("\(queueKey)DelayedZSet")
         }
     }
 }
