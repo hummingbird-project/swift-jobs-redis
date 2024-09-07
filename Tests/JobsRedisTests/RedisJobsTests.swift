@@ -197,7 +197,7 @@ final class RedisJobsTests: XCTestCase {
 
     func testDelayedJob() async throws {
         let jobIdentifer = JobIdentifier<Int>(#function)
-        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 2)
+        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 3)
         let jobExecutionSequence: NIOLockedValueBox<[Int]> = .init([])
         try await self.testJobQueue(numWorkers: 1) { jobQueue in
             jobQueue.registerJob(id: jobIdentifer) { parameters, _ in
@@ -210,16 +210,21 @@ final class RedisJobsTests: XCTestCase {
             try await jobQueue.push(
                 id: jobIdentifer,
                 parameters: 100,
-                options: .init(delayUntil: Date.now.addingTimeInterval(1))
+                options: .init(delayUntil: Date.now.addingTimeInterval(2))
             )
             try await jobQueue.push(
                 id: jobIdentifer,
                 parameters: 50
             )
+
+            try await jobQueue.push(
+                id: jobIdentifer,
+                parameters: 10
+            )
             await self.fulfillment(of: [expectation], timeout: 5)
         }
         jobExecutionSequence.withLockedValue {
-            XCTAssertEqual($0, [50, 100])
+            XCTAssertEqual($0, [50, 10, 100])
         }
     }
 
