@@ -216,7 +216,7 @@ final class RedisJobsTests: XCTestCase {
                 id: jobIdentifer,
                 parameters: 50
             )
-            await self.fulfillment(of: [expectation], timeout: 20)
+            await self.fulfillment(of: [expectation], timeout: 5)
         }
         jobExecutionSequence.withLockedValue {
             XCTAssertEqual($0, [50, 100])
