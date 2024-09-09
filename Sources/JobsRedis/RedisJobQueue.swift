@@ -180,7 +180,7 @@ public final class RedisJobQueue: JobQueueDriver {
 
         guard delay < now else {
             _ = try await pool.lpush(identifier.redisKey, into: self.configuration.queueKey).get()
-            _ = try await pool.lpop(from: self.configuration.processingQueueKey).get()
+            _ = try await pool.lrem(identifier.redisKey, from: self.configuration.processingQueueKey, count: 0).get()
             return nil
         }
 
