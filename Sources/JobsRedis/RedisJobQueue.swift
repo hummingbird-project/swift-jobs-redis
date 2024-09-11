@@ -46,7 +46,7 @@ public final class RedisJobQueue: JobQueueDriver {
 
         static func toMillis(value: Double?) -> Int64 {
             if let value {
-                return Int64(value) * 1000
+                return Int64(value * 1000)
             }
             return 0
         }
