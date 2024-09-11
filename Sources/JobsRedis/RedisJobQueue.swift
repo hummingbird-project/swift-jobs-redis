@@ -25,12 +25,11 @@ import RediStack
 public final class RedisJobQueue: JobQueueDriver {
     public struct JobID: Sendable, CustomStringConvertible {
         let id: String
-
-        let delayUntil: Double
+        let delayUntil: Int64
 
         public init(delayUntil: Double?) {
             self.id = UUID().uuidString
-            self.delayUntil = delayUntil ?? 0
+            self.delayUntil = Self.toMillis(value: delayUntil)
         }
 
         /// Initialize JobID from String
@@ -39,10 +38,26 @@ public final class RedisJobQueue: JobQueueDriver {
             let parts = value.components(separatedBy: ":")
             self.id = parts[0]
             self.delayUntil = if parts.count > 1 {
-                Double(parts[1]) ?? 0
+                Self.toMillisFromString(value: parts[1])
             } else {
                 0
             }
+        }
+
+        static func toMillis(value: Double?) -> Int64 {
+            if let value {
+                return Int64(value) * 1000
+            }
+            return 0
+        }
+
+        static func toMillisFromString(value: String) -> Int64 {
+            return Int64(value) ?? 0
+        }
+
+        func isDelayed() -> Bool {
+            let now = Self.toMillis(value: Date().timeIntervalSince1970)
+            return self.delayUntil > now
         }
 
         var redisKey: RedisKey { .init(self.description) }
@@ -163,10 +178,8 @@ public final class RedisJobQueue: JobQueueDriver {
         }
 
         let identifier = JobID(key)
-        let delay = identifier.delayUntil
-        let now = Date.now.timeIntervalSince1970
 
-        guard delay < now else {
+        if identifier.isDelayed() {
             _ = try await pool.lrem(identifier.redisKey, from: self.configuration.processingQueueKey, count: 0).get()
             _ = try await pool.lpush(identifier.redisKey, into: self.configuration.queueKey).get()
             return nil
