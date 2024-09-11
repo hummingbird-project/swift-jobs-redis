@@ -26,9 +26,9 @@ public final class RedisJobQueue: JobQueueDriver {
     public struct JobID: Sendable, CustomStringConvertible {
         let id: String
 
-        let delayUntil: Int
+        let delayUntil: Double
 
-        public init(delayUntil: Int?) {
+        public init(delayUntil: Double?) {
             self.id = UUID().uuidString
             self.delayUntil = delayUntil ?? 0
         }
@@ -38,23 +38,11 @@ public final class RedisJobQueue: JobQueueDriver {
         public init(_ value: String) {
             let parts = value.components(separatedBy: ":")
             self.id = parts[0]
-            self.delayUntil = if parts.count > 0 {
-                Int(parts[1]) ?? 0
+            self.delayUntil = if parts.count > 1 {
+                Double(parts[1]) ?? 0
             } else {
                 0
             }
-        }
-
-        public init(from decoder: Decoder) throws {
-            let container = try decoder.singleValueContainer()
-            self.id = try container.decode(String.self)
-            self.delayUntil = try container.decode(Int.self)
-        }
-
-        public func encode(to encoder: Encoder) throws {
-            var container = encoder.singleValueContainer()
-            try container.encode(self.id)
-            try container.encode(self.delayUntil)
         }
 
         var redisKey: RedisKey { .init(self.description) }
@@ -111,7 +99,7 @@ public final class RedisJobQueue: JobQueueDriver {
     @discardableResult public func push(_ buffer: ByteBuffer, options: JobOptions) async throws -> JobID {
         let delay = options.delayUntil?.timeIntervalSince1970 ?? 0
 
-        let jobInstanceID = JobID(delayUntil: Int(delay))
+        let jobInstanceID = JobID(delayUntil: Double(delay))
 
         try await self.set(jobId: jobInstanceID, buffer: buffer)
 
@@ -176,11 +164,11 @@ public final class RedisJobQueue: JobQueueDriver {
 
         let identifier = JobID(key)
         let delay = identifier.delayUntil
-        let now = Int(Date.now.timeIntervalSince1970)
+        let now = Date.now.timeIntervalSince1970
 
         guard delay < now else {
-            _ = try await pool.lpush(identifier.redisKey, into: self.configuration.queueKey).get()
             _ = try await pool.lrem(identifier.redisKey, from: self.configuration.processingQueueKey, count: 0).get()
+            _ = try await pool.lpush(identifier.redisKey, into: self.configuration.queueKey).get()
             return nil
         }
 
