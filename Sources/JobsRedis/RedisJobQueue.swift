@@ -56,7 +56,7 @@ public final class RedisJobQueue: JobQueueDriver {
         }
 
         func isDelayed() -> Bool {
-            let now = Self.toMillis(value: Date().timeIntervalSince1970)
+            let now = Self.toMillis(value: Date.now.timeIntervalSince1970)
             return self.delayUntil > now
         }
 
