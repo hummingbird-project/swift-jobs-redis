@@ -201,7 +201,7 @@ final class RedisJobsTests: XCTestCase {
         XCTAssertEqual(job.isDelayed(), false)
         XCTAssertEqual(job.description.components(separatedBy: ":").count, 2)
         let futureDate = Date().addingTimeInterval(100)
-        let delayedJob = RedisJobQueue.JobID(delayUntil: futureDate.timeIntervalSince1970)
+        let delayedJob = RedisJobQueue.JobID(delayUntil: futureDate)
         XCTAssertEqual(delayedJob.isDelayed(), true)
         XCTAssertEqual(delayedJob.description.components(separatedBy: ":").count, 2)
     }

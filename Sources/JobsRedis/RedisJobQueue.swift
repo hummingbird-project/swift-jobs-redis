@@ -27,9 +27,9 @@ public final class RedisJobQueue: JobQueueDriver {
         let id: String
         let delayUntil: Int64
 
-        public init(delayUntil: Double?) {
+        public init(delayUntil: Date?) {
             self.id = UUID().uuidString
-            self.delayUntil = Self.toMillis(value: delayUntil)
+            self.delayUntil = Self.toMillis(value: delayUntil?.timeIntervalSince1970)
         }
 
         /// Initialize JobID from String
@@ -46,7 +46,7 @@ public final class RedisJobQueue: JobQueueDriver {
 
         static func toMillis(value: Double?) -> Int64 {
             if let value {
-                return Int64(value * 1000)
+                return Double(value * 1000) < Double(Int64.max) ? Int64(value * 1000) : Int64.max
             }
             return 0
         }
@@ -112,9 +112,7 @@ public final class RedisJobQueue: JobQueueDriver {
     ///   - data: Job data
     /// - Returns: Queued job
     @discardableResult public func push(_ buffer: ByteBuffer, options: JobOptions) async throws -> JobID {
-        let delay = options.delayUntil?.timeIntervalSince1970 ?? 0
-
-        let jobInstanceID = JobID(delayUntil: Double(delay))
+        let jobInstanceID = JobID(delayUntil: options.delayUntil)
 
         try await self.set(jobId: jobInstanceID, buffer: buffer)
 
