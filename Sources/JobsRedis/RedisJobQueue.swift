@@ -29,7 +29,7 @@ public final class RedisJobQueue: JobQueueDriver {
 
         public init(delayUntil: Date?) {
             self.id = UUID().uuidString
-            self.delayUntil = Self.toMillis(value: delayUntil?.timeIntervalSince1970)
+            self.delayUntil = Self.toMilliseconds(value: delayUntil?.timeIntervalSinceReferenceDate)
         }
 
         /// Initialize JobID from String
@@ -38,25 +38,25 @@ public final class RedisJobQueue: JobQueueDriver {
             let parts = value.components(separatedBy: ":")
             self.id = parts[0]
             self.delayUntil = if parts.count > 1 {
-                Self.toMillisFromString(value: parts[1])
+                Self.toMillisecondsFromString(value: parts[1])
             } else {
                 0
             }
         }
 
-        static func toMillis(value: Double?) -> Int64 {
+        static func toMilliseconds(value: Double?) -> Int64 {
             if let value {
                 return Double(value * 1000) < Double(Int64.max) ? Int64(value * 1000) : Int64.max
             }
             return 0
         }
 
-        static func toMillisFromString(value: String) -> Int64 {
+        static func toMillisecondsFromString(value: String) -> Int64 {
             return Int64(value) ?? 0
         }
 
         func isDelayed() -> Bool {
-            let now = Self.toMillis(value: Date.now.timeIntervalSince1970)
+            let now = Self.toMilliseconds(value: Date.now.timeIntervalSinceReferenceDate)
             return self.delayUntil > now
         }
 
