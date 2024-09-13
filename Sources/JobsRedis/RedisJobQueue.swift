@@ -231,10 +231,6 @@ public final class RedisJobQueue: JobQueueDriver {
         return try await self.redisConnectionPool.wrappedValue.get(jobId.redisKey).get().byteBuffer
     }
 
-    func getDelayed(jobId: JobID) async throws -> ByteBuffer? {
-        return try await self.redisConnectionPool.wrappedValue.get(jobId.redisKey).get().byteBuffer
-    }
-
     func set(jobId: JobID, buffer: ByteBuffer) async throws {
         try await self.redisConnectionPool.wrappedValue.set(jobId.redisKey, to: buffer).get()
     }
