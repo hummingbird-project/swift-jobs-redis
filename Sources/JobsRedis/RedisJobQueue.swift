@@ -32,11 +32,6 @@ public final class RedisJobQueue: JobQueueDriver {
             self.delayUntil = Self.toMilliseconds(value: delayUntil?.timeIntervalSince1970)
         }
 
-        init(_ job: JobID, delayUntil: Date?) {
-            self.id = job.id
-            self.delayUntil = Self.toMilliseconds(value: delayUntil?.timeIntervalSince1970)
-        }
-
         /// Initialize JobID from String
         /// - Parameter value: string value
         public init(_ value: String) {
@@ -71,23 +66,16 @@ public final class RedisJobQueue: JobQueueDriver {
         public var description: String {
             "\(self.id):\(self.delayUntil)"
         }
-
-        /// Computed property used for wildcard matching since a key is in the following format
-        /// JobID:delayUntil
-        public var pattern: String { .init("\(self.id):*") }
     }
 
     public enum RedisQueueError: Error, CustomStringConvertible {
         case unexpectedRedisKeyType
         case jobMissing(JobID)
-        case unexpectedMultipleRedisKeysForJob(JobID)
 
         public var description: String {
             switch self {
             case .unexpectedRedisKeyType:
                 return "Unexpected redis key type"
-            case .unexpectedMultipleRedisKeysForJob(let value):
-                return "Unexpected multiple redis keys for job id: \(value.id)"
             case .jobMissing(let value):
                 return "Job associated with \(value) is missing"
             }
@@ -134,17 +122,6 @@ public final class RedisJobQueue: JobQueueDriver {
         _ = try await self.redisConnectionPool.wrappedValue.lpush(jobId.redisKey, into: self.configuration.queueKey).get()
     }
 
-    /// Retries failed job currently processing upto maxRetrycount
-    /// - Parameters:
-    ///   - jobId: JobID
-    ///   - data: Job data
-    /// - Returns: Queued job
-    public func retry(jobId: JobID, buffer: NIOCore.ByteBuffer, options: Jobs.JobOptions) async throws {
-        let newJobId = JobID(jobId, delayUntil: options.delayUntil)
-        try await self.cleanupRetryingJob(jobId: jobId)
-        try await self.addToQueue(newJobId, buffer: buffer)
-    }
-
     /// Flag job is done
     ///
     /// Removes  job id from processing queue
@@ -153,27 +130,6 @@ public final class RedisJobQueue: JobQueueDriver {
     public func finished(jobId: JobID) async throws {
         _ = try await self.redisConnectionPool.wrappedValue.lrem(jobId.description, from: self.configuration.processingQueueKey, count: 0).get()
         try await self.delete(jobId: jobId)
-    }
-
-    private func cleanupRetryingJob(jobId: JobID) async throws {
-        let (count, prevJobId) = try await self.redisConnectionPool.wrappedValue.scan(
-            startingFrom: 0,
-            matching: jobId.pattern
-        ).get()
-        // This case should never happend, because there should only be one
-        // unique key for a given job instance. Guarding against just to be sure
-        if count > 0 {
-            throw RedisQueueError.unexpectedMultipleRedisKeysForJob(jobId)
-        }
-
-        guard let prevJobId = prevJobId.first else {
-            return
-        }
-
-        let actualJobId = JobID(prevJobId)
-
-        _ = try await self.redisConnectionPool.wrappedValue.lrem(actualJobId.redisKey, from: self.configuration.processingQueueKey, count: 0).get()
-        _ = try await self.redisConnectionPool.wrappedValue.delete(actualJobId.redisKey).get()
     }
 
     /// Flag job failed to process
