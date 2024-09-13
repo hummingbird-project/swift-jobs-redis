@@ -88,7 +88,7 @@ public final class RedisJobQueue: JobQueueDriver {
 
     /// Initialize redis job queue
     /// - Parameters:
-    ///   - redisConnectionPoolService: Redis connection pool
+    ///   - redisConnectionPool: Redis connection pool
     ///   - configuration: configuration
     public init(_ redisConnectionPool: RedisConnectionPool, configuration: Configuration = .init()) {
         self.redisConnectionPool = .init(redisConnectionPool)
@@ -109,8 +109,9 @@ public final class RedisJobQueue: JobQueueDriver {
 
     /// Push job data onto queue
     /// - Parameters:
-    ///   - data: Job data
-    /// - Returns: Queued job
+    ///   - buffer: Job data
+    ///   - options: Job options
+    /// - Returns: Job ID
     @discardableResult public func push(_ buffer: ByteBuffer, options: JobOptions) async throws -> JobID {
         let jobInstanceID = JobID(delayUntil: options.delayUntil)
 
@@ -268,7 +269,7 @@ extension RedisJobQueue {
 extension JobQueueDriver where Self == RedisJobQueue {
     /// Return Redis driver for Job Queue
     /// - Parameters:
-    ///   - redisConnectionPoolService: Redis connection pool
+    ///   - redisConnectionPool: Redis connection pool
     ///   - configuration: configuration
     public static func redis(_ redisConnectionPool: RedisConnectionPool, configuration: RedisJobQueue.Configuration = .init()) -> Self {
         .init(redisConnectionPool, configuration: configuration)
