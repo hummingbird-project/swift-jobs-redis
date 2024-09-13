@@ -14,6 +14,7 @@
 
 import Atomics
 import struct Foundation.Data
+import struct Foundation.Date
 import class Foundation.JSONDecoder
 import struct Foundation.UUID
 import Jobs
@@ -24,31 +25,47 @@ import RediStack
 public final class RedisJobQueue: JobQueueDriver {
     public struct JobID: Sendable, CustomStringConvertible {
         let id: String
+        let delayUntil: Int64
 
-        public init() {
+        public init(delayUntil: Date?) {
             self.id = UUID().uuidString
+            self.delayUntil = Self.toMilliseconds(value: delayUntil?.timeIntervalSince1970)
         }
 
         /// Initialize JobID from String
         /// - Parameter value: string value
         public init(_ value: String) {
-            self.id = value
+            let parts = value.components(separatedBy: ":")
+            self.id = parts[0]
+            self.delayUntil = if parts.count > 1 {
+                Self.toMillisecondsFromString(value: parts[1])
+            } else {
+                0
+            }
         }
 
-        public init(from decoder: Decoder) throws {
-            let container = try decoder.singleValueContainer()
-            self.id = try container.decode(String.self)
+        static func toMilliseconds(value: Double?) -> Int64 {
+            if let value {
+                return Double(value * 1000) < Double(Int64.max) ? Int64(value * 1000) : Int64.max
+            }
+            return 0
         }
 
-        public func encode(to encoder: Encoder) throws {
-            var container = encoder.singleValueContainer()
-            try container.encode(self.id)
+        static func toMillisecondsFromString(value: String) -> Int64 {
+            return Int64(value) ?? 0
+        }
+
+        func isDelayed() -> Bool {
+            let now = Self.toMilliseconds(value: Date.now.timeIntervalSince1970)
+            return self.delayUntil > now
         }
 
         var redisKey: RedisKey { .init(self.description) }
 
         /// String description of Identifier
-        public var description: String { self.id }
+        public var description: String {
+            "\(self.id):\(self.delayUntil)"
+        }
     }
 
     public enum RedisQueueError: Error, CustomStringConvertible {
@@ -94,9 +111,11 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameters:
     ///   - data: Job data
     /// - Returns: Queued job
-    @discardableResult public func push(_ buffer: ByteBuffer) async throws -> JobID {
-        let jobInstanceID = JobID()
+    @discardableResult public func push(_ buffer: ByteBuffer, options: JobOptions) async throws -> JobID {
+        let jobInstanceID = JobID(delayUntil: options.delayUntil)
+
         try await self.set(jobId: jobInstanceID, buffer: buffer)
+
         _ = try await self.redisConnectionPool.wrappedValue.lpush(jobInstanceID.redisKey, into: self.configuration.queueKey).get()
         return jobInstanceID
     }
@@ -151,10 +170,19 @@ public final class RedisJobQueue: JobQueueDriver {
         guard !key.isNull else {
             return nil
         }
+
         guard let key = String(fromRESP: key) else {
             throw RedisQueueError.unexpectedRedisKeyType
         }
+
         let identifier = JobID(key)
+
+        if identifier.isDelayed() {
+            _ = try await pool.lrem(identifier.redisKey, from: self.configuration.processingQueueKey, count: 0).get()
+            _ = try await pool.lpush(identifier.redisKey, into: self.configuration.queueKey).get()
+            return nil
+        }
+
         if let buffer = try await self.get(jobId: identifier) {
             return .init(id: identifier, jobBuffer: buffer)
         } else {

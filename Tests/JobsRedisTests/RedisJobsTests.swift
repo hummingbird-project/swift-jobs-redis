@@ -195,6 +195,50 @@ final class RedisJobsTests: XCTestCase {
         }
     }
 
+    func testJobId() async throws {
+        let job = RedisJobQueue.JobID(delayUntil: nil)
+        XCTAssertEqual(job.delayUntil, 0)
+        XCTAssertEqual(job.isDelayed(), false)
+        XCTAssertEqual(job.description.components(separatedBy: ":").count, 2)
+        let futureDate = Date().addingTimeInterval(100)
+        let delayedJob = RedisJobQueue.JobID(delayUntil: futureDate)
+        XCTAssertEqual(delayedJob.isDelayed(), true)
+        XCTAssertEqual(delayedJob.description.components(separatedBy: ":").count, 2)
+    }
+
+    func testDelayedJob() async throws {
+        let jobIdentifer = JobIdentifier<Int>(#function)
+        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 3)
+        let jobExecutionSequence: NIOLockedValueBox<[Int]> = .init([])
+        try await self.testJobQueue(numWorkers: 1) { jobQueue in
+            jobQueue.registerJob(id: jobIdentifer) { parameters, _ in
+                jobExecutionSequence.withLockedValue {
+                    $0.append(parameters)
+                }
+                expectation.fulfill()
+                try await Task.sleep(for: .milliseconds(1000))
+            }
+            try await jobQueue.push(
+                id: jobIdentifer,
+                parameters: 100,
+                options: .init(delayUntil: Date.now.addingTimeInterval(2))
+            )
+            try await jobQueue.push(
+                id: jobIdentifer,
+                parameters: 50
+            )
+
+            try await jobQueue.push(
+                id: jobIdentifer,
+                parameters: 10
+            )
+            await self.fulfillment(of: [expectation], timeout: 5)
+        }
+        jobExecutionSequence.withLockedValue {
+            XCTAssertEqual($0, [50, 10, 100])
+        }
+    }
+
     /// Test job is cancelled on shutdown
     func testShutdownJob() async throws {
         let jobIdentifer = JobIdentifier<Int>(#function)
