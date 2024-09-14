@@ -109,7 +109,7 @@ public final class RedisJobQueue: JobQueueDriver {
 
     /// Push job data onto queue
     /// - Parameters:
-    ///   - buffer: Job data
+    ///   - buffer: Encoded Job data
     ///   - options: Job options
     /// - Returns: Job ID
     @discardableResult public func push(_ buffer: ByteBuffer, options: JobOptions) async throws -> JobID {
