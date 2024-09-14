@@ -114,11 +114,13 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Returns: Job ID
     @discardableResult public func push(_ buffer: ByteBuffer, options: JobOptions) async throws -> JobID {
         let jobInstanceID = JobID(delayUntil: options.delayUntil)
-
-        try await self.set(jobId: jobInstanceID, buffer: buffer)
-
-        _ = try await self.redisConnectionPool.wrappedValue.lpush(jobInstanceID.redisKey, into: self.configuration.queueKey).get()
+        try await self.addToQueue(jobInstanceID, buffer: buffer)
         return jobInstanceID
+    }
+
+    private func addToQueue(_ jobId: JobID, buffer: ByteBuffer) async throws {
+        try await self.set(jobId: jobId, buffer: buffer)
+        _ = try await self.redisConnectionPool.wrappedValue.lpush(jobId.redisKey, into: self.configuration.queueKey).get()
     }
 
     /// Flag job is done
