@@ -22,4 +22,4 @@ Redis is an open source, in-memory data structure store, used as a database, cac
 
 ## Documentation
 
-Reference documentation for HummingbirdRedis can be found [here](https://docs.hummingbird.codes/2.0/documentation/jobsredis)
+Reference documentation for JobsRedis can be found [here](https://docs.hummingbird.codes/2.0/documentation/jobsredis)
