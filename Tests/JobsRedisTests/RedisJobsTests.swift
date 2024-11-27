@@ -15,7 +15,6 @@
 import Atomics
 import Foundation
 import Jobs
-@testable import JobsRedis
 import Logging
 import NIOConcurrencyHelpers
 import NIOCore
@@ -23,6 +22,8 @@ import NIOPosix
 import RediStack
 import ServiceLifecycle
 import XCTest
+
+@testable import JobsRedis
 
 extension XCTestExpectation {
     convenience init(description: String, expectedFulfillmentCount: Int) {
@@ -209,7 +210,8 @@ final class RedisJobsTests: XCTestCase {
             let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.queueKey).get()
             XCTAssertEqual(pendingJobs, 0)
 
-            let processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey).get()
+            let processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey)
+                .get()
             XCTAssertEqual(processingJobs, 0)
         }
         XCTAssertEqual(currentJobTryCount.withLockedValue { $0 }, 2)
@@ -296,7 +298,8 @@ final class RedisJobsTests: XCTestCase {
             let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.queueKey).get()
             XCTAssertEqual(pendingJobs, 0)
             let failedJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.failedQueueKey).get()
-            let processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey).get()
+            let processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey)
+                .get()
             XCTAssertEqual(failedJobs + processingJobs, 1)
         }
     }
