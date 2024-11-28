@@ -13,13 +13,14 @@
 //===----------------------------------------------------------------------===//
 
 import Atomics
+import Jobs
+import NIOCore
+import RediStack
+
 import struct Foundation.Data
 import struct Foundation.Date
 import class Foundation.JSONDecoder
 import struct Foundation.UUID
-import Jobs
-import NIOCore
-import RediStack
 
 /// Redis implementation of job queue driver
 public final class RedisJobQueue: JobQueueDriver {
@@ -37,11 +38,12 @@ public final class RedisJobQueue: JobQueueDriver {
         public init(_ value: String) {
             let parts = value.components(separatedBy: ":")
             self.id = parts[0]
-            self.delayUntil = if parts.count > 1 {
-                Self.toMillisecondsFromString(value: parts[1])
-            } else {
-                0
-            }
+            self.delayUntil =
+                if parts.count > 1 {
+                    Self.toMillisecondsFromString(value: parts[1])
+                } else {
+                    0
+                }
         }
 
         static func toMilliseconds(value: Double?) -> Int64 {
@@ -52,7 +54,7 @@ public final class RedisJobQueue: JobQueueDriver {
         }
 
         static func toMillisecondsFromString(value: String) -> Int64 {
-            return Int64(value) ?? 0
+            Int64(value) ?? 0
         }
 
         func isDelayed() -> Bool {
@@ -153,7 +155,7 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameter key: Metadata key
     /// - Returns: Associated ByteBuffer
     public func getMetadata(_ key: String) async throws -> ByteBuffer? {
-        return try await self.redisConnectionPool.wrappedValue.get(.init(key)).get().byteBuffer
+        try await self.redisConnectionPool.wrappedValue.get(.init(key)).get().byteBuffer
     }
 
     /// Set job queue metadata
@@ -231,7 +233,7 @@ public final class RedisJobQueue: JobQueueDriver {
     }
 
     func get(jobId: JobID) async throws -> ByteBuffer? {
-        return try await self.redisConnectionPool.wrappedValue.get(jobId.redisKey).get().byteBuffer
+        try await self.redisConnectionPool.wrappedValue.get(jobId.redisKey).get().byteBuffer
     }
 
     func set(jobId: JobID, buffer: ByteBuffer) async throws {
@@ -264,7 +266,7 @@ extension RedisJobQueue {
     }
 
     public func makeAsyncIterator() -> AsyncIterator {
-        return .init(queue: self)
+        .init(queue: self)
     }
 }
 
@@ -292,6 +294,6 @@ extension ByteBuffer {
     }
 
     public func convertedToRESPValue() -> RESPValue {
-        return .bulkString(self)
+        .bulkString(self)
     }
 }
