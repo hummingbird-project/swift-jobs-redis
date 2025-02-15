@@ -63,7 +63,7 @@ public final class RedisJobQueue: JobQueueDriver {
         try await self.initQueue(queueKey: self.configuration.queueKey, onInit: .rerun)
         // should we clear the pending jobs
         if self.configuration.pendingJobInitialization == .remove {
-            try await self.remove(sortedListKey: self.configuration.pendingJobInitialization)
+            try await self.remove(sortedListKey: self.configuration.pendingQueueKey)
         }
         // there shouldn't be any on the processing list, but if there are we should do something with them
         try await self.initQueue(queueKey: self.configuration.processingQueueKey, onInit: self.configuration.processingJobsInitialization)
@@ -286,11 +286,7 @@ extension RedisClient {
     public func zpopmin(
         from key: RedisKey
     ) -> EventLoopFuture<(RESPValue, Double)> {
-        let args: [RESPValue] = [
-            .init(from: key)
-            //.init(from: count),
-        ]
-        return zpopmin(count: 1, from: key).flatMapThrowing { values in
+        zpopmin(count: 1, from: key).flatMapThrowing { values in
             guard let first = values.first else {
                 throw RedisClientError.assertionFailure(message: "Unexpected empty response")
             }
