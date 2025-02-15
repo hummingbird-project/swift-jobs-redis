@@ -59,12 +59,12 @@ public final class RedisJobQueue: JobQueueDriver {
     /// Will push all the jobs in the processing queue back onto to the main queue so they can
     /// be rerun
     public func onInit() async throws {
-        // move old pending key to new pending queue
-        try await self.initQueue(queueKey: self.configuration.queueKey, onInit: .rerun)
         // should we clear the pending jobs
         if self.configuration.pendingJobInitialization == .remove {
             try await self.remove(sortedListKey: self.configuration.pendingQueueKey)
         }
+        // move old pending key to new pending queue
+        try await self.initQueue(queueKey: self.configuration.queueKey, onInit: .rerun)
         // there shouldn't be any on the processing list, but if there are we should do something with them
         try await self.initQueue(queueKey: self.configuration.processingQueueKey, onInit: self.configuration.processingJobsInitialization)
         try await self.initQueue(queueKey: self.configuration.failedQueueKey, onInit: self.configuration.failedJobsInitialization)
@@ -136,7 +136,7 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Returns: queued job
     func popFirst() async throws -> QueuedJob<JobID>? {
         let pool = self.redisConnectionPool.wrappedValue
-        guard let values = try await pool.zpopmin(from: self.configuration.pendingQueueKey).get() else {
+        guard let values = try await pool._zpopmin(from: self.configuration.pendingQueueKey).get() else {
             return nil
         }
         guard let key = String(fromRESP: values.0) else {
@@ -201,7 +201,7 @@ public final class RedisJobQueue: JobQueueDriver {
     /// Push all the entries from list back onto the main list.
     func remove(sortedListKey: RedisKey) async throws {
         while true {
-            guard let values = try await self.redisConnectionPool.wrappedValue.zpopmin(from: sortedListKey).get() else {
+            guard let values = try await self.redisConnectionPool.wrappedValue._zpopmin(from: sortedListKey).get() else {
                 break
             }
             guard let key = RedisKey(fromRESP: values.0) else {
@@ -283,25 +283,20 @@ extension RedisJobQueue.JobID {
 
 extension RedisClient {
     @inlinable
-    public func zpopmin(
+    public func _zpopmin(
         from key: RedisKey
-    ) -> EventLoopFuture<(RESPValue, Double)> {
-        zpopmin(count: 1, from: key).flatMapThrowing { values in
-            guard let first = values.first else {
-                throw RedisClientError.assertionFailure(message: "Unexpected empty response")
-            }
-            return first
-        }
+    ) -> EventLoopFuture<(RESPValue, Double)?> {
+        _zpopmin(count: 1, from: key).map(\.first)
     }
 
     @inlinable
-    public func zpopmin(
+    public func _zpopmin(
         count: Int,
         from key: RedisKey
     ) -> EventLoopFuture<[(RESPValue, Double)]> {
         let args: [RESPValue] = [
             .init(from: key),
-            .init(from: count)
+            .init(from: count),
         ]
         return self.send(command: "ZPOPMIN", with: args).flatMapThrowing { value in
             guard let values = [RESPValue](fromRESP: value) else { throw RedisClientError.failedRESPConversion(to: [RESPValue].self) }
