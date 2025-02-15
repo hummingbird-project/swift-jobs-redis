@@ -84,11 +84,13 @@ final class RedisJobsTests: XCTestCase {
         )
 
         return try await withThrowingTaskGroup(of: Void.self) { group in
+            var logger = Logger(label: "JobQueueService")
+            logger.logLevel = .debug
             let serviceGroup = ServiceGroup(
                 configuration: .init(
                     services: [redisService, jobQueue],
                     gracefulShutdownSignals: [.sigterm, .sigint],
-                    logger: Logger(label: "JobQueueService")
+                    logger: logger
                 )
             )
             group.addTask {
@@ -177,7 +179,7 @@ final class RedisJobsTests: XCTestCase {
             let failedJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.failedQueueKey).get()
             XCTAssertEqual(failedJobs, 1)
 
-            let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.queueKey).get()
+            let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.pendingQueueKey).get()
             XCTAssertEqual(pendingJobs, 0)
         }
     }
@@ -207,7 +209,7 @@ final class RedisJobsTests: XCTestCase {
             let failedJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.failedQueueKey).get()
             XCTAssertEqual(failedJobs, 0)
 
-            let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.queueKey).get()
+            let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.pendingQueueKey).get()
             XCTAssertEqual(pendingJobs, 0)
 
             let processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey)
@@ -234,17 +236,6 @@ final class RedisJobsTests: XCTestCase {
 
             await self.fulfillment(of: [expectation], timeout: 5)
         }
-    }
-
-    func testJobId() async throws {
-        let job = RedisJobQueue.JobID(delayUntil: nil)
-        XCTAssertEqual(job.delayUntil, 0)
-        XCTAssertEqual(job.isDelayed(), false)
-        XCTAssertEqual(job.description.components(separatedBy: ":").count, 2)
-        let futureDate = Date().addingTimeInterval(100)
-        let delayedJob = RedisJobQueue.JobID(delayUntil: futureDate)
-        XCTAssertEqual(delayedJob.isDelayed(), true)
-        XCTAssertEqual(delayedJob.description.components(separatedBy: ":").count, 2)
     }
 
     func testDelayedJob() async throws {
@@ -295,7 +286,7 @@ final class RedisJobsTests: XCTestCase {
             try await jobQueue.push(id: jobIdentifer, parameters: 0)
             await self.fulfillment(of: [expectation], timeout: 5)
 
-            let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.queueKey).get()
+            let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.pendingQueueKey).get()
             XCTAssertEqual(pendingJobs, 0)
             let failedJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.failedQueueKey).get()
             let processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey)
