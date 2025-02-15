@@ -304,8 +304,8 @@ extension RedisClient {
         from key: RedisKey
     ) -> EventLoopFuture<[(RESPValue, Double)]> {
         let args: [RESPValue] = [
-            .init(from: key)
-            //.init(from: count),
+            .init(from: key),
+            .init(from: count)
         ]
         return self.send(command: "ZPOPMIN", with: args).flatMapThrowing { value in
             guard let values = [RESPValue](fromRESP: value) else { throw RedisClientError.failedRESPConversion(to: [RESPValue].self) }
