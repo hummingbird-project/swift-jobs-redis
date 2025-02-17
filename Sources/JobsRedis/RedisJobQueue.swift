@@ -15,20 +15,40 @@
 import Atomics
 import Jobs
 import NIOCore
-import RediStack
+@preconcurrency import RediStack
 
-import struct Foundation.Data
-import struct Foundation.Date
-import class Foundation.JSONDecoder
-import struct Foundation.UUID
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
+import Foundation
+#endif
 
 /// Redis implementation of job queue driver
 public final class RedisJobQueue: JobQueueDriver {
-    public typealias JobID = String
+    public struct JobID: CustomStringConvertible, RESPValueConvertible {
+        let id: RedisKey
+
+        public init() {
+            self.id = .init(UUID().uuidString)
+        }
+
+        public init?(fromRESP value: RESPValue) {
+            guard let id = RedisKey(fromRESP: value) else { return nil }
+            self.id = id
+        }
+
+        public func convertedToRESPValue() -> RESPValue {
+            self.id.convertedToRESPValue()
+        }
+
+        var redisKey: RedisKey { self.id }
+
+        public var description: String { self.id.rawValue }
+    }
 
     public enum RedisQueueError: Error, CustomStringConvertible {
         case unexpectedRedisKeyType
-        case jobMissing(String)
+        case jobMissing(JobID)
 
         public var description: String {
             switch self {
@@ -76,7 +96,7 @@ public final class RedisJobQueue: JobQueueDriver {
     ///   - options: Job options
     /// - Returns: Job ID
     @discardableResult public func push(_ buffer: ByteBuffer, options: JobOptions) async throws -> JobID {
-        let jobInstanceID = UUID().uuidString
+        let jobInstanceID = JobID()
         try await self.addToQueue(jobInstanceID, buffer: buffer, options: options)
         return jobInstanceID
     }
@@ -139,21 +159,20 @@ public final class RedisJobQueue: JobQueueDriver {
         guard let values = try await pool._zpopmin(from: self.configuration.pendingQueueKey).get() else {
             return nil
         }
-        guard let key = String(fromRESP: values.0) else {
+        guard let identifier = JobID(fromRESP: values.0) else {
             throw RedisQueueError.unexpectedRedisKeyType
         }
         let score = values.1
         guard Date.now.timeIntervalSince1970 > score else {
             _ = try await pool.zadd(
-                (element: key, score: score),
+                (element: identifier, score: score),
                 to: self.configuration.pendingQueueKey
             ).get()
             return nil
         }
-        _ = try await pool.lpush(key, into: self.configuration.processingQueueKey).get()
-        let identifier = JobID(key)
+        _ = try await pool.lpush(identifier, into: self.configuration.processingQueueKey).get()
 
-        if let buffer = try await self.get(jobKey: key.redisKey) {
+        if let buffer = try await self.get(jobKey: identifier.redisKey) {
             return .init(id: identifier, jobBuffer: buffer)
         } else {
             throw RedisQueueError.jobMissing(identifier)
@@ -277,11 +296,9 @@ extension ByteBuffer {
     }
 }
 
-extension RedisJobQueue.JobID {
-    var redisKey: RedisKey { .init(self) }
-}
-
 extension RedisClient {
+    /// The version of zpopmin in RediStack does not work, so until a fix is merged I have
+    /// implemented a version of it here
     @inlinable
     public func _zpopmin(
         from key: RedisKey
@@ -289,6 +306,8 @@ extension RedisClient {
         _zpopmin(count: 1, from: key).map(\.first)
     }
 
+    /// The version of zpopmin in RediStack does not work, so until a fix is merged I have
+    /// implemented a version of it here
     @inlinable
     public func _zpopmin(
         count: Int,
