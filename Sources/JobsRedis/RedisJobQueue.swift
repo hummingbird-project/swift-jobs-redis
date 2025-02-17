@@ -25,7 +25,7 @@ import Foundation
 
 /// Redis implementation of job queue driver
 public final class RedisJobQueue: JobQueueDriver {
-    public struct JobID: CustomStringConvertible, RESPValueConvertible {
+    public struct JobID: CustomStringConvertible, RESPValueConvertible, Sendable {
         let id: RedisKey
 
         public init() {
