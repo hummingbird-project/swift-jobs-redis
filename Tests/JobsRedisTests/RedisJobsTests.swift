@@ -58,7 +58,7 @@ final class RedisJobsTests: XCTestCase {
     /// shutdown correctly
     @discardableResult public func testJobQueue<T>(
         numWorkers: Int,
-        failedJobsInitialization: RedisJobQueue.JobInitialization = .remove,
+        failedJobsInitialization: RedisJobQueue.JobCleanup = .remove,
         test: (JobQueue<RedisJobQueue>) async throws -> T
     ) async throws -> T {
         var logger = Logger(label: "RedisJobsTests")
@@ -66,14 +66,7 @@ final class RedisJobsTests: XCTestCase {
         let redis = try createRedisConnectionPool(logger: logger)
         let redisService = RedisConnectionPoolService(redis)
         let jobQueue = JobQueue(
-            .redis(
-                redis,
-                configuration: .init(
-                    pendingJobInitialization: .remove,
-                    processingJobsInitialization: .remove,
-                    failedJobsInitialization: failedJobsInitialization
-                )
-            ),
+            .redis(redis),
             numWorkers: numWorkers,
             logger: logger,
             options: .init(
@@ -94,6 +87,7 @@ final class RedisJobsTests: XCTestCase {
             group.addTask {
                 try await serviceGroup.run()
             }
+            try await jobQueue.queue.cleanup(failedJobs: failedJobsInitialization, processingJobs: .remove, pendingJobs: .remove)
             let value = try await test(jobQueue)
             await serviceGroup.triggerGracefulShutdown()
             return value
