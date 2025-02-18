@@ -15,7 +15,7 @@
 import Atomics
 import Jobs
 import NIOCore
-import RediStack
+@preconcurrency import RediStack
 
 import struct Foundation.Data
 import struct Foundation.Date
@@ -88,6 +88,13 @@ public final class RedisJobQueue: JobQueueDriver {
     let configuration: Configuration
     let isStopped: ManagedAtomic<Bool>
 
+    /// what to do with failed/processing jobs from last time queue was handled
+    public enum JobCleanup: Sendable {
+        case doNothing
+        case rerun
+        case remove
+    }
+
     /// Initialize redis job queue
     /// - Parameters:
     ///   - redisConnectionPool: Redis connection pool
@@ -98,15 +105,33 @@ public final class RedisJobQueue: JobQueueDriver {
         self.isStopped = .init(false)
     }
 
-    /// This is run at initialization time.
+    ///  Cleanup job queues
     ///
-    /// Will push all the jobs in the processing queue back onto to the main queue so they can
-    /// be rerun
-    public func onInit() async throws {
-        try await self.initQueue(queueKey: self.configuration.queueKey, onInit: self.configuration.pendingJobInitialization)
+    /// This function is used to re-run or delete jobs in a certain state. Failed jobs can be
+    /// pushed back into the pending queue to be re-run or removed. When called at startup in
+    /// theory no job should be set to processing, or set to pending but not in the queue. but if
+    /// your job server crashes these states are possible, so we also provide options to re-queue
+    /// these jobs so they are run again.
+    ///
+    /// The job queue needs to be running when you call cleanup. You can call `cleanup` with
+    /// `failedJobs`` set to whatever you like at any point to re-queue failed jobs. Moving processing
+    /// or pending jobs should only be done if you are certain there is nothing else processing
+    /// the job queue.
+    ///
+    /// - Parameters:
+    ///   - failedJobs: What to do with jobs tagged as failed
+    ///   - processingJobs: What to do with jobs tagged as processing
+    ///   - pendingJobs: What to do with jobs tagged as pending
+    /// - Throws:
+    public func cleanup(
+        failedJobs: JobCleanup = .doNothing,
+        processingJobs: JobCleanup = .doNothing,
+        pendingJobs: JobCleanup = .doNothing
+    ) async throws {
+        try await self.initQueue(queueKey: self.configuration.queueKey, onInit: pendingJobs)
         // there shouldn't be any on the processing list, but if there are we should do something with them
-        try await self.initQueue(queueKey: self.configuration.processingQueueKey, onInit: self.configuration.processingJobsInitialization)
-        try await self.initQueue(queueKey: self.configuration.failedQueueKey, onInit: self.configuration.failedJobsInitialization)
+        try await self.initQueue(queueKey: self.configuration.processingQueueKey, onInit: processingJobs)
+        try await self.initQueue(queueKey: self.configuration.failedQueueKey, onInit: failedJobs)
     }
 
     /// Push job data onto queue
@@ -196,7 +221,7 @@ public final class RedisJobQueue: JobQueueDriver {
     }
 
     /// What to do with queue at initialization
-    func initQueue(queueKey: RedisKey, onInit: JobInitialization) async throws {
+    func initQueue(queueKey: RedisKey, onInit: JobCleanup) async throws {
         switch onInit {
         case .remove:
             try await self.remove(queueKey: queueKey)

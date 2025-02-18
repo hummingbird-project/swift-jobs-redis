@@ -16,37 +16,21 @@ import NIOCore
 @preconcurrency import RediStack
 
 extension RedisJobQueue {
-    /// what to do with failed/processing jobs from last time queue was handled
-    public enum JobInitialization: Sendable {
-        case doNothing
-        case rerun
-        case remove
-    }
-
     /// Redis Job queue configuration
     public struct Configuration: Sendable {
         let queueKey: RedisKey
         let processingQueueKey: RedisKey
         let failedQueueKey: RedisKey
-        let pendingJobInitialization: JobInitialization
-        let processingJobsInitialization: JobInitialization
-        let failedJobsInitialization: JobInitialization
         let pollTime: Duration
 
         public init(
             queueKey: String = "_hbJobQueue",
-            pollTime: Duration = .milliseconds(100),
-            pendingJobInitialization: JobInitialization = .doNothing,
-            processingJobsInitialization: JobInitialization = .rerun,
-            failedJobsInitialization: JobInitialization = .doNothing
+            pollTime: Duration = .milliseconds(100)
         ) {
             self.queueKey = RedisKey(queueKey)
             self.processingQueueKey = RedisKey("\(queueKey)Processing")
             self.failedQueueKey = RedisKey("\(queueKey)Failed")
             self.pollTime = pollTime
-            self.pendingJobInitialization = pendingJobInitialization
-            self.processingJobsInitialization = processingJobsInitialization
-            self.failedJobsInitialization = failedJobsInitialization
         }
     }
 }
