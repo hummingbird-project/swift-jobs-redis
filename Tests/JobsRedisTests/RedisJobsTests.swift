@@ -231,14 +231,15 @@ final class RedisJobsTests: XCTestCase {
     }
 
     func testJobId() async throws {
-        let job = RedisJobQueue.JobID(delayUntil: nil)
+        let job = RedisJobQueue.PendingJobID(jobID: .init(), delayUntil: nil)
         XCTAssertEqual(job.delayUntil, 0)
         XCTAssertEqual(job.isDelayed(), false)
-        XCTAssertEqual(job.description.components(separatedBy: ":").count, 2)
         let futureDate = Date().addingTimeInterval(100)
-        let delayedJob = RedisJobQueue.JobID(delayUntil: futureDate)
+        let delayedJob = RedisJobQueue.PendingJobID(jobID: .init(), delayUntil: futureDate)
         XCTAssertEqual(delayedJob.isDelayed(), true)
-        XCTAssertEqual(delayedJob.description.components(separatedBy: ":").count, 2)
+        let respValue = delayedJob.convertedToRESPValue()
+        let delayedJob2 = RedisJobQueue.PendingJobID(fromRESP: respValue)
+        XCTAssertEqual(delayedJob, delayedJob2)
     }
 
     func testDelayedJob() async throws {
