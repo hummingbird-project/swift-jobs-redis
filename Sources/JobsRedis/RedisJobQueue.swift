@@ -159,13 +159,13 @@ public final class RedisJobQueue: JobQueueDriver {
         try await self.push(jobID: jobInstanceID, buffer: buffer, options: options)
         return jobInstanceID
     }
-    
+
     /// Helper for enqueuing jobs
     private func push(jobID: JobID, buffer: ByteBuffer, options: JobOptions) async throws {
         let pendingJobID = PendingJobID(jobID: jobID, delayUntil: options.delayUntil)
         try await self.addToQueue(pendingJobID, buffer: buffer)
     }
-    
+
     /// Retry job data onto queue
     /// - Parameters:
     ///   - id: JobID
