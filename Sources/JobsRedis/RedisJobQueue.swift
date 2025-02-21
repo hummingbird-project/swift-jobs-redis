@@ -49,7 +49,7 @@ public final class RedisJobQueue: JobQueueDriver {
 
         public init(jobID: JobID, delayUntil: Date?) {
             self.jobID = .init()
-            self.delayUntil = Self.toMilliseconds(value: (delayUntil ?? Date.now).timeIntervalSince1970)
+            self.delayUntil = Self.toMilliseconds(value: delayUntil?.timeIntervalSince1970)
         }
 
         public init?(fromRESP value: RediStack.RESPValue) {
