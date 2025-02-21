@@ -11,7 +11,7 @@ let package = Package(
     ],
     dependencies: [
         // TODO: use a released version
-        .package(url: "https://github.com/thoven87/swift-jobs.git", branch: "update-job-on-retry"),
+        .package(url: "https://github.com/hummingbird-project/swift-jobs.git", branch: "main"),
         .package(url: "https://github.com/swift-server/RediStack.git", from: "1.6.2"),
     ],
     targets: [
