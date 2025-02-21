@@ -156,9 +156,26 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Returns: Job ID
     @discardableResult public func push(_ buffer: ByteBuffer, options: JobOptions) async throws -> JobID {
         let jobInstanceID = JobID()
-        let pendingJobID = PendingJobID(jobID: jobInstanceID, delayUntil: options.delayUntil)
-        try await self.addToQueue(pendingJobID, buffer: buffer)
+        try await self.push(jobID: jobInstanceID, buffer: buffer, options: options)
         return jobInstanceID
+    }
+
+    /// Helper for enqueuing jobs
+    private func push(jobID: JobID, buffer: ByteBuffer, options: JobOptions) async throws {
+        let pendingJobID = PendingJobID(jobID: jobID, delayUntil: options.delayUntil)
+        try await self.addToQueue(pendingJobID, buffer: buffer)
+    }
+
+    /// Retry job data onto queue
+    /// - Parameters:
+    ///   - id: JobID
+    ///   - buffer: Encoded Job data
+    ///   - options: JobOptions
+    /// - Returns: Bool
+    @discardableResult public func retry(_ id: JobID, buffer: NIOCore.ByteBuffer, options: Jobs.JobOptions) async throws -> Bool {
+        try await self.finished(jobId: id)
+        try await self.push(jobID: id, buffer: buffer, options: options)
+        return true
     }
 
     private func addToQueue(_ pendingJobID: PendingJobID, buffer: ByteBuffer) async throws {
