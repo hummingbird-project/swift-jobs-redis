@@ -118,6 +118,7 @@ public final class RedisJobQueue: JobQueueDriver {
         self.redisConnectionPool = .init(redisConnectionPool)
         self.configuration = configuration
         self.isStopped = .init(false)
+        self.jobRegistry = .init()
     }
 
     ///  Cleanup job queues
@@ -149,37 +150,44 @@ public final class RedisJobQueue: JobQueueDriver {
         try await self.initQueue(queueKey: self.configuration.failedQueueKey, onInit: failedJobs)
     }
 
+    ///  Register job
+    /// - Parameters:
+    ///   - job: Job Definition
+    public func registerJob<Parameters: Codable & Sendable>(_ job: JobDefinition<Parameters>) {
+        self.jobRegistry.registerJob(job)
+    }
+
     /// Push job data onto queue
     /// - Parameters:
     ///   - buffer: Encoded Job data
     ///   - options: Job options
     /// - Returns: Job ID
-    @discardableResult public func push(_ buffer: ByteBuffer, options: JobOptions) async throws -> JobID {
+    @discardableResult public func push<Parameters>(_ jobRequest: JobRequest<Parameters>, options: JobOptions) async throws -> JobID {
         let jobInstanceID = JobID()
-        try await self.push(jobID: jobInstanceID, buffer: buffer, options: options)
+        try await self.push(jobID: jobInstanceID, jobRequest: jobRequest, options: options)
         return jobInstanceID
-    }
-
-    /// Helper for enqueuing jobs
-    private func push(jobID: JobID, buffer: ByteBuffer, options: JobOptions) async throws {
-        let pendingJobID = PendingJobID(jobID: jobID, delayUntil: options.delayUntil)
-        try await self.addToQueue(pendingJobID, buffer: buffer)
     }
 
     /// Retry job data onto queue
     /// - Parameters:
     ///   - id: JobID
-    ///   - buffer: Encoded Job data
+    ///   - jobRequest: Job request
     ///   - options: JobOptions
     /// - Returns: Bool
-    @discardableResult public func retry(_ id: JobID, buffer: NIOCore.ByteBuffer, options: Jobs.JobOptions) async throws -> Bool {
-        try await self.finished(jobId: id)
-        try await self.push(jobID: id, buffer: buffer, options: options)
-        return true
+    public func retry<Parameters>(_ id: JobID, jobRequest: JobRequest<Parameters>, options: JobOptions) async throws {
+        try await self.finished(jobID: id)
+        try await self.push(jobID: id, jobRequest: jobRequest, options: options)
+    }
+
+    /// Helper for enqueuing jobs
+    private func push<Parameters>(jobID: JobID, jobRequest: JobRequest<Parameters>, options: JobOptions) async throws {
+        let buffer = try self.jobRegistry.encode(jobRequest: jobRequest)
+        let pendingJobID = PendingJobID(jobID: jobID, delayUntil: options.delayUntil)
+        try await self.addToQueue(pendingJobID, buffer: buffer)
     }
 
     private func addToQueue(_ pendingJobID: PendingJobID, buffer: ByteBuffer) async throws {
-        try await self.set(jobId: pendingJobID.jobID, buffer: buffer)
+        try await self.set(jobID: pendingJobID.jobID, buffer: buffer)
         _ = try await self.redisConnectionPool.wrappedValue.lpush(pendingJobID, into: self.configuration.queueKey).get()
     }
 
@@ -187,20 +195,20 @@ public final class RedisJobQueue: JobQueueDriver {
     ///
     /// Removes  job id from processing queue
     /// - Parameters:
-    ///   - jobId: Job id
-    public func finished(jobId: JobID) async throws {
-        _ = try await self.redisConnectionPool.wrappedValue.lrem(jobId.description, from: self.configuration.processingQueueKey, count: 0).get()
-        try await self.delete(jobId: jobId)
+    ///   - jobID: Job id
+    public func finished(jobID: JobID) async throws {
+        _ = try await self.redisConnectionPool.wrappedValue.lrem(jobID.description, from: self.configuration.processingQueueKey, count: 0).get()
+        try await self.delete(jobID: jobID)
     }
 
     /// Flag job failed to process
     ///
     /// Removes  job id from processing queue, adds to failed queue
     /// - Parameters:
-    ///   - jobId: Job id
-    public func failed(jobId: JobID, error: Error) async throws {
-        _ = try await self.redisConnectionPool.wrappedValue.lrem(jobId.redisKey, from: self.configuration.processingQueueKey, count: 0).get()
-        _ = try await self.redisConnectionPool.wrappedValue.lpush(jobId.redisKey, into: self.configuration.failedQueueKey).get()
+    ///   - jobID: Job id
+    public func failed(jobID: JobID, error: Error) async throws {
+        _ = try await self.redisConnectionPool.wrappedValue.lrem(jobID.redisKey, from: self.configuration.processingQueueKey, count: 0).get()
+        _ = try await self.redisConnectionPool.wrappedValue.lpush(jobID.redisKey, into: self.configuration.failedQueueKey).get()
     }
 
     public func stop() async {
@@ -227,7 +235,7 @@ public final class RedisJobQueue: JobQueueDriver {
     /// Pop Job off queue and add to pending queue
     /// - Parameter eventLoop: eventLoop to do work on
     /// - Returns: queued job
-    func popFirst() async throws -> QueuedJob<JobID>? {
+    func popFirst() async throws -> JobQueueResult<JobID>? {
         let pool = self.redisConnectionPool.wrappedValue
         let pendingJobKey = try await pool.rpop(from: self.configuration.queueKey).get()
         guard !pendingJobKey.isNull else {
@@ -246,10 +254,15 @@ public final class RedisJobQueue: JobQueueDriver {
 
         _ = try await pool.lpush(jobID.redisKey, into: self.configuration.processingQueueKey).get()
 
-        if let buffer = try await self.get(jobId: jobID) {
-            return .init(id: jobID, jobBuffer: buffer)
+        if let buffer = try await self.get(jobID: jobID) {
+            do {
+                let jobInstance = try self.jobRegistry.decode(buffer)
+                return .init(id: jobID, result: .success(jobInstance))
+            } catch let error as JobQueueError {
+                return .init(id: jobID, result: .failure(error))
+            }
         } else {
-            throw RedisQueueError.jobMissing(jobID)
+            return .init(id: jobID, result: .failure(JobQueueError(code: .unrecognisedJobId, jobName: nil)))
         }
     }
 
@@ -277,7 +290,7 @@ public final class RedisJobQueue: JobQueueDriver {
                 guard let key = PendingJobID(fromRESP: key) else {
                     throw RedisQueueError.unexpectedRedisKeyType
                 }
-                try await self.delete(jobId: key.jobID)
+                try await self.delete(jobID: key.jobID)
             }
         default:
             break
@@ -305,26 +318,28 @@ public final class RedisJobQueue: JobQueueDriver {
                 throw RedisQueueError.unexpectedRedisKeyType
             }
             let identifier = JobID(value: key)
-            try await self.delete(jobId: identifier)
+            try await self.delete(jobID: identifier)
         }
     }
 
-    func get(jobId: JobID) async throws -> ByteBuffer? {
-        try await self.redisConnectionPool.wrappedValue.get(jobId.redisKey).get().byteBuffer
+    func get(jobID: JobID) async throws -> ByteBuffer? {
+        try await self.redisConnectionPool.wrappedValue.get(jobID.redisKey).get().byteBuffer
     }
 
-    func set(jobId: JobID, buffer: ByteBuffer) async throws {
-        try await self.redisConnectionPool.wrappedValue.set(jobId.redisKey, to: buffer).get()
+    func set(jobID: JobID, buffer: ByteBuffer) async throws {
+        try await self.redisConnectionPool.wrappedValue.set(jobID.redisKey, to: buffer).get()
     }
 
-    func delete(jobId: JobID) async throws {
-        _ = try await self.redisConnectionPool.wrappedValue.delete(jobId.redisKey).get()
+    func delete(jobID: JobID) async throws {
+        _ = try await self.redisConnectionPool.wrappedValue.delete(jobID.redisKey).get()
     }
+
+    let jobRegistry: JobRegistry
 }
 
 /// extend RedisJobQueue to conform to AsyncSequence
 extension RedisJobQueue {
-    public typealias Element = QueuedJob<JobID>
+    public typealias Element = JobQueueResult<JobID>
     public struct AsyncIterator: AsyncIteratorProtocol {
         let queue: RedisJobQueue
 
