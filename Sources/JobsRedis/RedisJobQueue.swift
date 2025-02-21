@@ -164,15 +164,8 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Returns: Job ID
     @discardableResult public func push<Parameters>(_ jobRequest: JobRequest<Parameters>, options: JobOptions) async throws -> JobID {
         let jobInstanceID = JobID()
-        try await self.push(jobID: jobInstanceID, buffer: buffer, options: options)
+        try await self.push(jobID: jobInstanceID, jobRequest: jobRequest, options: options)
         return jobInstanceID
-    }
-
-    /// Helper for enqueuing jobs
-    private func push(jobID: JobID, jobRequest: JobRequest<Parameters>, options: JobOptions) async throws {
-        let buffer = try self.jobRegistry.encode(jobRequest: jobRequest)
-        let pendingJobID = PendingJobID(jobID: jobID, delayUntil: options.delayUntil)
-        try await self.addToQueue(pendingJobID, buffer: buffer)
     }
 
     /// Retry job data onto queue
@@ -182,13 +175,19 @@ public final class RedisJobQueue: JobQueueDriver {
     ///   - options: JobOptions
     /// - Returns: Bool
     public func retry<Parameters>(_ id: JobID, jobRequest: JobRequest<Parameters>, options: JobOptions) async throws {
-        try await self.finished(jobId: id)
+        try await self.finished(jobID: id)
         try await self.push(jobID: id, jobRequest: jobRequest, options: options)
-        return true
+    }
+
+    /// Helper for enqueuing jobs
+    private func push<Parameters>(jobID: JobID, jobRequest: JobRequest<Parameters>, options: JobOptions) async throws {
+        let buffer = try self.jobRegistry.encode(jobRequest: jobRequest)
+        let pendingJobID = PendingJobID(jobID: jobID, delayUntil: options.delayUntil)
+        try await self.addToQueue(pendingJobID, buffer: buffer)
     }
 
     private func addToQueue(_ pendingJobID: PendingJobID, buffer: ByteBuffer) async throws {
-        try await self.set(jobId: pendingJobID.jobID, buffer: buffer)
+        try await self.set(jobID: pendingJobID.jobID, buffer: buffer)
         _ = try await self.redisConnectionPool.wrappedValue.lpush(pendingJobID, into: self.configuration.queueKey).get()
     }
 
@@ -261,8 +260,6 @@ public final class RedisJobQueue: JobQueueDriver {
                 return .init(id: jobID, result: .success(jobInstance))
             } catch let error as JobQueueError {
                 return .init(id: jobID, result: .failure(error))
-            } catch {
-                return .init(id: jobID, result: .failure(JobQueueError(code: .unrecognised, jobName: nil, details: "\(error)")))
             }
         } else {
             return .init(id: jobID, result: .failure(JobQueueError(code: .unrecognisedJobId, jobName: nil)))
@@ -293,7 +290,7 @@ public final class RedisJobQueue: JobQueueDriver {
                 guard let key = PendingJobID(fromRESP: key) else {
                     throw RedisQueueError.unexpectedRedisKeyType
                 }
-                try await self.delete(jobId: key.jobID)
+                try await self.delete(jobID: key.jobID)
             }
         default:
             break
@@ -321,7 +318,7 @@ public final class RedisJobQueue: JobQueueDriver {
                 throw RedisQueueError.unexpectedRedisKeyType
             }
             let identifier = JobID(value: key)
-            try await self.delete(jobId: identifier)
+            try await self.delete(jobID: identifier)
         }
     }
 
