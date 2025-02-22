@@ -11,7 +11,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/hummingbird-project/swift-jobs.git", branch: "main"),
-        .package(url: "https://github.com/swift-server/RediStack.git", from: "1.4.0"),
+        .package(url: "https://github.com/swift-server/RediStack.git", from: "1.6.2"),
     ],
     targets: [
         .target(
