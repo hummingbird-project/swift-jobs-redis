@@ -21,15 +21,17 @@ extension RedisJobQueue {
         let queueKey: RedisKey
         let processingQueueKey: RedisKey
         let failedQueueKey: RedisKey
+        let metadataKeyPrefix: String
         let pollTime: Duration
 
         public init(
             queueKey: String = "_hbJobQueue",
             pollTime: Duration = .milliseconds(100)
         ) {
-            self.queueKey = RedisKey(queueKey)
-            self.processingQueueKey = RedisKey("\(queueKey)Processing")
-            self.failedQueueKey = RedisKey("\(queueKey)Failed")
+            self.queueKey = RedisKey("\(queueKey).pending")
+            self.processingQueueKey = RedisKey("\(queueKey).processing")
+            self.failedQueueKey = RedisKey("\(queueKey).failed")
+            self.metadataKeyPrefix = "\(queueKey).metadata"
             self.pollTime = pollTime
         }
     }
