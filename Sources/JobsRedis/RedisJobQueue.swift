@@ -24,6 +24,10 @@ import struct Foundation.UUID
 
 /// Redis implementation of job queue driver
 public final class RedisJobQueue: JobQueueDriver {
+    
+    /// Queue to push jobs into
+    public let queueName: String
+    
     public struct JobID: Sendable, CustomStringConvertible, Equatable {
         let value: String
 
@@ -119,6 +123,7 @@ public final class RedisJobQueue: JobQueueDriver {
         self.configuration = configuration
         self.isStopped = .init(false)
         self.jobRegistry = .init()
+        self.queueName = configuration.queueKey.rawValue
     }
 
     ///  Cleanup job queues
