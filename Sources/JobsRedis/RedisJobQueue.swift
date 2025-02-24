@@ -221,7 +221,8 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameter key: Metadata key
     /// - Returns: Associated ByteBuffer
     public func getMetadata(_ key: String) async throws -> ByteBuffer? {
-        try await self.redisConnectionPool.wrappedValue.get(.init(key)).get().byteBuffer
+        let key = "\(self.configuration.metadataKeyPrefix).\(key)"
+        return try await self.redisConnectionPool.wrappedValue.get(.init(key)).get().byteBuffer
     }
 
     /// Set job queue metadata
@@ -229,6 +230,7 @@ public final class RedisJobQueue: JobQueueDriver {
     ///   - key: Metadata key
     ///   - value: Associated ByteBuffer
     public func setMetadata(key: String, value: ByteBuffer) async throws {
+        let key = "\(self.configuration.metadataKeyPrefix).\(key)"
         try await self.redisConnectionPool.wrappedValue.set(.init(key), to: value).get()
     }
 
