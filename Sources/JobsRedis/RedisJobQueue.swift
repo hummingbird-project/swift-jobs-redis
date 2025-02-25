@@ -159,7 +159,7 @@ public final class RedisJobQueue: JobQueueDriver {
 
     /// Push job data onto queue
     /// - Parameters:
-    ///   - buffer: Encoded Job data
+    ///   - jobRequest: Job request
     ///   - options: Job options
     /// - Returns: Job ID
     @discardableResult public func push<Parameters: JobParameters>(_ jobRequest: JobRequest<Parameters>, options: JobOptions) async throws -> JobID {
@@ -170,10 +170,9 @@ public final class RedisJobQueue: JobQueueDriver {
 
     /// Retry job data onto queue
     /// - Parameters:
-    ///   - id: JobID
+    ///   - id: Job instance ID
     ///   - jobRequest: Job request
     ///   - options: JobOptions
-    /// - Returns: Bool
     public func retry<Parameters>(_ id: JobID, jobRequest: JobRequest<Parameters>, options: JobOptions) async throws {
         try await self.finished(jobID: id)
         try await self.push(jobID: id, jobRequest: jobRequest, options: options)
