@@ -153,7 +153,7 @@ public final class RedisJobQueue: JobQueueDriver {
     ///  Register job
     /// - Parameters:
     ///   - job: Job Definition
-    public func registerJob<Parameters: Codable & Sendable>(_ job: JobDefinition<Parameters>) {
+    public func registerJob<Parameters: JobParameters>(_ job: JobDefinition<Parameters>) {
         self.jobRegistry.registerJob(job)
     }
 
@@ -162,7 +162,7 @@ public final class RedisJobQueue: JobQueueDriver {
     ///   - buffer: Encoded Job data
     ///   - options: Job options
     /// - Returns: Job ID
-    @discardableResult public func push<Parameters>(_ jobRequest: JobRequest<Parameters>, options: JobOptions) async throws -> JobID {
+    @discardableResult public func push<Parameters: JobParameters>(_ jobRequest: JobRequest<Parameters>, options: JobOptions) async throws -> JobID {
         let jobInstanceID = JobID()
         try await self.push(jobID: jobInstanceID, jobRequest: jobRequest, options: options)
         return jobInstanceID
