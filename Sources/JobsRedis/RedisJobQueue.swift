@@ -163,9 +163,11 @@ public final class RedisJobQueue: JobQueueDriver {
     ///   - options: Job options
     /// - Returns: Job ID
     @discardableResult public func push<Parameters: JobParameters>(_ jobRequest: JobRequest<Parameters>, options: JobOptions) async throws -> JobID {
-        let jobInstanceID = JobID()
-        try await self.push(jobID: jobInstanceID, jobRequest: jobRequest, options: options)
-        return jobInstanceID
+        try await withConvertedError {
+            let jobInstanceID = JobID()
+            try await self.push(jobID: jobInstanceID, jobRequest: jobRequest, options: options)
+            return jobInstanceID
+        }
     }
 
     /// Retry job data onto queue
@@ -174,8 +176,10 @@ public final class RedisJobQueue: JobQueueDriver {
     ///   - jobRequest: Job request
     ///   - options: JobOptions
     public func retry<Parameters>(_ id: JobID, jobRequest: JobRequest<Parameters>, options: JobOptions) async throws {
-        try await self.finished(jobID: id)
-        try await self.push(jobID: id, jobRequest: jobRequest, options: options)
+        try await withConvertedError {
+            try await self.finished(jobID: id)
+            try await self.push(jobID: id, jobRequest: jobRequest, options: options)
+        }
     }
 
     /// Helper for enqueuing jobs
@@ -196,8 +200,10 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameters:
     ///   - jobID: Job id
     public func finished(jobID: JobID) async throws {
-        _ = try await self.redisConnectionPool.wrappedValue.lrem(jobID.description, from: self.configuration.processingQueueKey, count: 0).get()
-        try await self.delete(jobID: jobID)
+        try await withConvertedError {
+            _ = try await self.redisConnectionPool.wrappedValue.lrem(jobID.description, from: self.configuration.processingQueueKey, count: 0).get()
+            try await self.delete(jobID: jobID)
+        }
     }
 
     /// Flag job failed to process
@@ -206,8 +212,10 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameters:
     ///   - jobID: Job id
     public func failed(jobID: JobID, error: Error) async throws {
-        _ = try await self.redisConnectionPool.wrappedValue.lrem(jobID.redisKey, from: self.configuration.processingQueueKey, count: 0).get()
-        _ = try await self.redisConnectionPool.wrappedValue.lpush(jobID.redisKey, into: self.configuration.failedQueueKey).get()
+        try await withConvertedError {
+            _ = try await self.redisConnectionPool.wrappedValue.lrem(jobID.redisKey, from: self.configuration.processingQueueKey, count: 0).get()
+            _ = try await self.redisConnectionPool.wrappedValue.lpush(jobID.redisKey, into: self.configuration.failedQueueKey).get()
+        }
     }
 
     public func stop() async {
@@ -237,33 +245,51 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameter eventLoop: eventLoop to do work on
     /// - Returns: queued job
     func popFirst() async throws -> JobQueueResult<JobID>? {
-        let pool = self.redisConnectionPool.wrappedValue
-        let pendingJobKey = try await pool.rpop(from: self.configuration.queueKey).get()
-        guard !pendingJobKey.isNull else {
-            return nil
-        }
-
-        guard let pendingJobID = PendingJobID(fromRESP: pendingJobKey) else {
-            throw RedisQueueError.unexpectedRedisKeyType
-        }
-
-        guard !pendingJobID.isDelayed() else {
-            _ = try await pool.lpush(pendingJobID, into: self.configuration.queueKey).get()
-            return nil
-        }
-        let jobID = pendingJobID.jobID
-
-        _ = try await pool.lpush(jobID.redisKey, into: self.configuration.processingQueueKey).get()
-
-        if let buffer = try await self.get(jobID: jobID) {
-            do {
-                let jobInstance = try self.jobRegistry.decode(buffer)
-                return .init(id: jobID, result: .success(jobInstance))
-            } catch let error as JobQueueError {
-                return .init(id: jobID, result: .failure(error))
+        try await withConvertedError {
+            let pool = self.redisConnectionPool.wrappedValue
+            let pendingJobKey = try await pool.rpop(from: self.configuration.queueKey).get()
+            guard !pendingJobKey.isNull else {
+                return nil
             }
-        } else {
-            return .init(id: jobID, result: .failure(JobQueueError(code: .unrecognisedJobId, jobName: nil)))
+
+            guard let pendingJobID = PendingJobID(fromRESP: pendingJobKey) else {
+                throw RedisQueueError.unexpectedRedisKeyType
+            }
+
+            guard !pendingJobID.isDelayed() else {
+                _ = try await pool.lpush(pendingJobID, into: self.configuration.queueKey).get()
+                return nil
+            }
+            let jobID = pendingJobID.jobID
+
+            _ = try await pool.lpush(jobID.redisKey, into: self.configuration.processingQueueKey).get()
+
+            if let buffer = try await self.get(jobID: jobID) {
+                do {
+                    let jobInstance = try self.jobRegistry.decode(buffer)
+                    return .init(id: jobID, result: .success(jobInstance))
+                } catch let error as JobQueueError {
+                    return .init(id: jobID, result: .failure(error))
+                }
+            } else {
+                return .init(id: jobID, result: .failure(JobQueueError(code: .unrecognisedJobId, jobName: nil)))
+            }
+        }
+    }
+
+    /// Run operation and convert connection errors to JobQueueDriverError connectionError
+    /// - Parameter operation: Operation to run
+    /// - Returns: Return value of operation
+    func withConvertedError<Value>(_ operation: () async throws -> Value) async throws -> Value {
+        do {
+            return try await operation()
+        } catch let error as RedisClientError where error == .connectionClosed {
+            throw JobQueueDriverError(.connectionError, underlyingError: error)
+        } catch let error as RedisConnectionPoolError where error == .timedOutWaitingForConnection {
+            throw JobQueueDriverError(.connectionError, underlyingError: error)
+        } catch {
+            print(error)
+            throw error
         }
     }
 
