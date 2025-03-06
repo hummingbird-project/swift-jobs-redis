@@ -43,6 +43,23 @@ public final class RedisJobQueue: JobQueueDriver {
         }
     }
 
+    /// Options for job pushed to queue
+    public struct JobOptions: JobOptionsProtocol {
+        /// Delay running job until
+        public var delayUntil: Date?
+
+        /// Default initializer for JobOptions
+        public init() {
+            self.delayUntil = nil
+        }
+
+        ///  Initializer for JobOptions
+        /// - Parameter delayUntil: Whether job execution should be delayed until a later date
+        public init(delayUntil: Date?) {
+            self.delayUntil = delayUntil
+        }
+    }
+
     public struct PendingJobID: RESPValueConvertible, Equatable {
         let jobID: JobID
         let delayUntil: Int64
@@ -172,8 +189,9 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameters:
     ///   - id: Job instance ID
     ///   - jobRequest: Job request
-    ///   - options: JobOptions
-    public func retry<Parameters>(_ id: JobID, jobRequest: JobRequest<Parameters>, options: JobOptions) async throws {
+    ///   - options: Job retry options
+    public func retry<Parameters>(_ id: JobID, jobRequest: JobRequest<Parameters>, options: JobRetryOptions) async throws {
+        let options = JobOptions(delayUntil: options.delayUntil)
         try await self.finished(jobID: id)
         try await self.push(jobID: id, jobRequest: jobRequest, options: options)
     }
