@@ -45,12 +45,16 @@ public final class RedisJobQueue: JobQueueDriver {
 
     /// Options for job pushed to queue
     public struct JobOptions: JobOptionsProtocol {
+        /// Delay running job until
         public var delayUntil: Date?
 
+        /// Default initializer for JobOptions
         public init() {
             self.delayUntil = nil
         }
 
+        ///  Initializer for JobOptions
+        /// - Parameter delayUntil: Whether job execution should be delayed until a later date
         public init(delayUntil: Date?) {
             self.delayUntil = delayUntil
         }
