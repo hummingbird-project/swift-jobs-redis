@@ -70,9 +70,10 @@ final class RedisJobsTests: XCTestCase {
             numWorkers: numWorkers,
             logger: logger,
             options: .init(
-                maximumBackoff: 0.01,
-                maxJitter: 0.01,
-                minJitter: 0.0
+                defaultRetryStrategy: .exponentialJitter(
+                    maxBackoff: 0.01,
+                    maxJitter: 0.01
+                )
             )
         )
 
@@ -167,7 +168,10 @@ final class RedisJobsTests: XCTestCase {
         let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 4)
         struct FailedError: Error {}
         try await self.testJobQueue(numWorkers: 1) { jobQueue in
-            jobQueue.registerJob(parameters: TestParameters.self, maxRetryCount: 3) { _, _ in
+            jobQueue.registerJob(
+                parameters: TestParameters.self,
+                retryStrategy: .exponentialJitter(maxAttempts: 3, maxBackoff: 0.1, maxJitter: 0.01)
+            ) { _, _ in
                 expectation.fulfill()
                 throw FailedError()
             }
@@ -192,7 +196,10 @@ final class RedisJobsTests: XCTestCase {
         let currentJobTryCount: NIOLockedValueBox<Int> = .init(0)
         struct FailedError: Error {}
         try await self.testJobQueue(numWorkers: 1) { jobQueue in
-            jobQueue.registerJob(parameters: TestParameters.self, maxRetryCount: 3) { _, _ in
+            jobQueue.registerJob(
+                parameters: TestParameters.self,
+                retryStrategy: .exponentialJitter(maxAttempts: 3, maxBackoff: 0.1, maxJitter: 0.01)
+            ) { _, _ in
                 defer {
                     currentJobTryCount.withLockedValue {
                         $0 += 1

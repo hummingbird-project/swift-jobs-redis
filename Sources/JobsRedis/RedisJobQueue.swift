@@ -43,6 +43,18 @@ public final class RedisJobQueue: JobQueueDriver {
         }
     }
 
+    public struct JobOptions: JobOptionsProtocol {
+        public var delayUntil: Date?
+
+        public init() {
+            self.delayUntil = nil
+        }
+
+        public init(delayUntil: Date?) {
+            self.delayUntil = delayUntil
+        }
+    }
+
     public struct PendingJobID: RESPValueConvertible, Equatable {
         let jobID: JobID
         let delayUntil: Int64
@@ -173,7 +185,8 @@ public final class RedisJobQueue: JobQueueDriver {
     ///   - id: Job instance ID
     ///   - jobRequest: Job request
     ///   - options: JobOptions
-    public func retry<Parameters>(_ id: JobID, jobRequest: JobRequest<Parameters>, options: JobOptions) async throws {
+    public func retry<Parameters>(_ id: JobID, jobRequest: JobRequest<Parameters>, options: JobRetryOptions) async throws {
+        let options = JobOptions(delayUntil: options.delayUntil)
         try await self.finished(jobID: id)
         try await self.push(jobID: id, jobRequest: jobRequest, options: options)
     }
