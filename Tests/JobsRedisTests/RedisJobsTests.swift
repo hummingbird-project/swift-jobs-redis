@@ -70,10 +70,7 @@ final class RedisJobsTests: XCTestCase {
             numWorkers: numWorkers,
             logger: logger,
             options: .init(
-                defaultRetryStrategy: .exponentialJitter(
-                    maxBackoff: 0.01,
-                    maxJitter: 0.01
-                )
+                defaultRetryStrategy: .exponentialJitter(maxBackoff: .milliseconds(10))
             )
         )
 
@@ -170,7 +167,7 @@ final class RedisJobsTests: XCTestCase {
         try await self.testJobQueue(numWorkers: 1) { jobQueue in
             jobQueue.registerJob(
                 parameters: TestParameters.self,
-                retryStrategy: .exponentialJitter(maxAttempts: 3, maxBackoff: 0.1, maxJitter: 0.01)
+                retryStrategy: .exponentialJitter(maxAttempts: 3, maxBackoff: .milliseconds(100))
             ) { _, _ in
                 expectation.fulfill()
                 throw FailedError()
@@ -198,7 +195,7 @@ final class RedisJobsTests: XCTestCase {
         try await self.testJobQueue(numWorkers: 1) { jobQueue in
             jobQueue.registerJob(
                 parameters: TestParameters.self,
-                retryStrategy: .exponentialJitter(maxAttempts: 3, maxBackoff: 0.1, maxJitter: 0.01)
+                retryStrategy: .exponentialJitter(maxAttempts: 3, maxBackoff: .milliseconds(100))
             ) { _, _ in
                 defer {
                     currentJobTryCount.withLockedValue {
