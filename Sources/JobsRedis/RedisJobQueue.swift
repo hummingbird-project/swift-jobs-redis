@@ -189,7 +189,7 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameters:
     ///   - id: Job instance ID
     ///   - jobRequest: Job request
-    ///   - options: JobOptions
+    ///   - options: Job retry options
     public func retry<Parameters>(_ id: JobID, jobRequest: JobRequest<Parameters>, options: JobRetryOptions) async throws {
         let options = JobOptions(delayUntil: options.delayUntil)
         try await self.finished(jobID: id)
