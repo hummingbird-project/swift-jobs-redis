@@ -43,6 +43,7 @@ public final class RedisJobQueue: JobQueueDriver {
         }
     }
 
+    /// Options for job pushed to queue
     public struct JobOptions: JobOptionsProtocol {
         public var delayUntil: Date?
 
