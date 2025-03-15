@@ -490,11 +490,11 @@ final class RedisJobsTests: XCTestCase {
             )
 
             try await jobQueue.cancelJob(jobID: cancellable)
-            
+
             group.addTask {
                 try await serviceGroup.run()
             }
-            
+
             await self.fulfillment(of: [expectation], timeout: 5)
 
             await serviceGroup.triggerGracefulShutdown()
