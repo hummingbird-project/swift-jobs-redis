@@ -445,6 +445,134 @@ final class RedisJobsTests: XCTestCase {
         let metadata2 = try await jobQueue.getMetadata("test")
         XCTAssertEqual(metadata2, value2)
     }
+
+    func testCancellableJob() async throws {
+        struct TestParameters: JobParameters {
+            static let jobName = "testJobActions"
+            let value: Int
+        }
+        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 1)
+        let jobRunSequence: NIOLockedValueBox<[Int]> = .init([])
+
+        var logger = Logger(label: "RedisJobsTests")
+        logger.logLevel = .debug
+        let redis = try createRedisConnectionPool(logger: logger)
+        let redisService = RedisConnectionPoolService(redis)
+        let jobQueue = JobQueue(
+            .redis(redis),
+            numWorkers: 1,
+            logger: logger,
+            options: .init(
+                defaultRetryStrategy: .exponentialJitter(maxBackoff: .milliseconds(10))
+            )
+        )
+
+        jobQueue.registerJob(parameters: TestParameters.self) { parameters, _ in
+            jobRunSequence.withLockedValue {
+                $0.append(parameters.value)
+            }
+            expectation.fulfill()
+        }
+
+        let cancellable = try await jobQueue.push(
+            TestParameters(value: 42)
+        )
+
+        try await jobQueue.push(TestParameters(value: 10))
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            let serviceGroup = ServiceGroup(
+                configuration: .init(
+                    services: [redisService, jobQueue],
+                    gracefulShutdownSignals: [.sigterm, .sigint],
+                    logger: Logger(label: "JobQueueService")
+                )
+            )
+
+            try await jobQueue.cancelJob(jobID: cancellable)
+            
+            group.addTask {
+                try await serviceGroup.run()
+            }
+            
+            await self.fulfillment(of: [expectation], timeout: 5)
+
+            await serviceGroup.triggerGracefulShutdown()
+        }
+
+        jobRunSequence.withLockedValue {
+            XCTAssertEqual($0, [10])
+        }
+    }
+
+    func testResumableAndPausableJobs() async throws {
+        struct TestParameters: JobParameters {
+            static let jobName = "TestJob"
+            let value: Int
+        }
+        struct ResumableJob: JobParameters {
+            static let jobName = "ResumanableJob"
+        }
+        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 2)
+        let didResumableJobRun: NIOLockedValueBox<Bool> = .init(false)
+        let didTestJobRun: NIOLockedValueBox<Bool> = .init(false)
+
+        var logger = Logger(label: "RedisJobsTests")
+        logger.logLevel = .debug
+        let redis = try createRedisConnectionPool(logger: logger)
+        let redisService = RedisConnectionPoolService(redis)
+        let jobQueue = JobQueue(
+            .redis(redis),
+            numWorkers: 1,
+            logger: logger,
+            options: .init(
+                defaultRetryStrategy: .exponentialJitter(maxBackoff: .milliseconds(10))
+            )
+        )
+
+        jobQueue.registerJob(parameters: TestParameters.self) { parameters, _ in
+            didTestJobRun.withLockedValue { $0 = true }
+            expectation.fulfill()
+        }
+
+        jobQueue.registerJob(parameters: ResumableJob.self) { parameters, _ in
+            didResumableJobRun.withLockedValue { $0 = true }
+            expectation.fulfill()
+        }
+
+        let resumable = try await jobQueue.push(ResumableJob())
+
+        try await jobQueue.push(TestParameters(value: 10))
+
+        try await jobQueue.pauseJob(jobID: resumable)
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            let serviceGroup = ServiceGroup(
+                configuration: .init(
+                    services: [redisService, jobQueue],
+                    gracefulShutdownSignals: [.sigterm, .sigint],
+                    logger: Logger(label: "JobQueueService")
+                )
+            )
+
+            group.addTask {
+                try await serviceGroup.run()
+            }
+
+            try await jobQueue.resumeJob(jobID: resumable)
+
+            await self.fulfillment(of: [expectation], timeout: 5)
+
+            await serviceGroup.triggerGracefulShutdown()
+        }
+
+        didTestJobRun.withLockedValue {
+            XCTAssertEqual($0, true)
+        }
+        didResumableJobRun.withLockedValue {
+            XCTAssertEqual($0, true)
+        }
+    }
 }
 
 struct RedisConnectionPoolService: Service {
