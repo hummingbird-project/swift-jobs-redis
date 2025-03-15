@@ -23,7 +23,7 @@ import class Foundation.JSONDecoder
 import struct Foundation.UUID
 
 /// Redis implementation of job queue driver
-public final class RedisJobQueue: JobQueueDriver {
+public final class RedisJobQueue: JobQueueDriver, CancellableJobQueue, ResumableJobQueue {
     public struct JobID: Sendable, CustomStringConvertible, Equatable {
         let value: String
 
@@ -65,7 +65,7 @@ public final class RedisJobQueue: JobQueueDriver {
         let delayUntil: Int64
 
         public init(jobID: JobID, delayUntil: Date?) {
-            self.jobID = .init()
+            self.jobID = jobID
             self.delayUntil = Self.toMilliseconds(value: delayUntil?.timeIntervalSince1970)
         }
 
@@ -194,6 +194,35 @@ public final class RedisJobQueue: JobQueueDriver {
         let options = JobOptions(delayUntil: options.delayUntil)
         try await self.finished(jobID: id)
         try await self.push(jobID: id, jobRequest: jobRequest, options: options)
+    }
+
+    /// Cancels a job
+    /// Note that cancelling a job is best effort
+    /// - Parameters:
+    ///   - id: Job instance ID
+    public func cancel(jobID: JobID) async throws {
+        let pendingJobID = PendingJobID(jobID: jobID, delayUntil: nil)
+        _ = try await self.redisConnectionPool.wrappedValue.lrem(pendingJobID, from: self.configuration.queueKey, count: 0).get()
+        try await self.delete(jobID: jobID)
+    }
+
+    /// Pauses a job
+    /// Note that pausing a job is best effort
+    /// - Parameters:
+    ///   - id: Job instance ID
+    public func pause(jobID: JobID) async throws {
+        let pendingJobID = PendingJobID(jobID: jobID, delayUntil: nil)
+        _ = try await self.redisConnectionPool.wrappedValue.lrem(pendingJobID, from: self.configuration.queueKey, count: 0).get()
+        _ = try await self.redisConnectionPool.wrappedValue.lpush(jobID.redisKey, into: self.configuration.pausedQueueKey).get()
+    }
+
+    /// Resumes a paused a job
+    /// - Parameters:
+    ///   - id: Job instance ID
+    public func resume(jobID: JobID) async throws {
+        let pendingJobID = PendingJobID(jobID: jobID, delayUntil: nil)
+        _ = try await self.redisConnectionPool.wrappedValue.lrem(jobID.redisKey, from: self.configuration.pausedQueueKey).get()
+        _ = try await self.redisConnectionPool.wrappedValue.lpush(pendingJobID, into: self.configuration.queueKey).get()
     }
 
     /// Helper for enqueuing jobs
