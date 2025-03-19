@@ -19,7 +19,7 @@ import Logging
 import NIOConcurrencyHelpers
 import NIOCore
 import NIOPosix
-import RediStack
+@preconcurrency import RediStack
 import ServiceLifecycle
 import XCTest
 
@@ -65,8 +65,8 @@ final class RedisJobsTests: XCTestCase {
         logger.logLevel = .debug
         let redis = try createRedisConnectionPool(logger: logger)
         let redisService = RedisConnectionPoolService(redis)
-        let jobQueue = JobQueue(
-            .redis(redis),
+        let jobQueue = try await JobQueue(
+            .redis(redis, configuration: .init(queueKey: "MyJobQueue", pollTime: .milliseconds(50)), logger: logger),
             numWorkers: numWorkers,
             logger: logger,
             options: .init(
@@ -395,14 +395,14 @@ final class RedisJobsTests: XCTestCase {
         }
         let redis = try createRedisConnectionPool(logger: logger)
         let redisService = RedisConnectionPoolService(redis)
-        let jobQueue = JobQueue(
-            RedisJobQueue(redis),
+        let jobQueue = try await JobQueue(
+            RedisJobQueue(redis, logger: logger),
             numWorkers: 2,
             logger: logger
         )
         jobQueue.registerJob(job)
-        let jobQueue2 = JobQueue(
-            RedisJobQueue(redis),
+        let jobQueue2 = try await JobQueue(
+            RedisJobQueue(redis, logger: logger),
             numWorkers: 2,
             logger: logger
         )
@@ -434,8 +434,9 @@ final class RedisJobsTests: XCTestCase {
     }
 
     func testMetadata() async throws {
-        let redis = try createRedisConnectionPool(logger: Logger(label: "Jobs"))
-        let jobQueue = RedisJobQueue(redis)
+        let logger = Logger(label: "Jobs")
+        let redis = try createRedisConnectionPool(logger: logger)
+        let jobQueue = try await RedisJobQueue(redis, logger: logger)
         let value = ByteBuffer(string: "Testing metadata")
         try await jobQueue.setMetadata(key: "test", value: value)
         let metadata = try await jobQueue.getMetadata("test")
@@ -448,23 +449,18 @@ final class RedisJobsTests: XCTestCase {
 }
 
 struct RedisConnectionPoolService: Service {
-    let pool: UnsafeTransfer<RedisConnectionPool>
+    let pool: RedisConnectionPool
 
     init(_ pool: RedisConnectionPool) {
-        self.pool = .init(pool)
-    }
-
-    public var eventLoop: EventLoop { self.pool.wrappedValue.eventLoop }
-
-    public func close() async throws {
-        let promise = self.eventLoop.makePromise(of: Void.self)
-        self.pool.wrappedValue.close(promise: promise)
-        return try await promise.futureResult.get()
+        self.pool = pool
     }
 
     public func run() async throws {
-        /// Ignore cancellation error
+        // Wait for graceful shutdown and ignore cancellation error
         try? await gracefulShutdown()
-        try await self.close()
+        // close connection pool
+        let promise = self.pool.eventLoop.makePromise(of: Void.self)
+        self.pool.close(promise: promise)
+        return try await promise.futureResult.get()
     }
 }

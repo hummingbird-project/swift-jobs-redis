@@ -14,6 +14,7 @@
 
 import Atomics
 import Jobs
+import Logging
 import NIOCore
 @preconcurrency import RediStack
 
@@ -119,6 +120,7 @@ public final class RedisJobQueue: JobQueueDriver {
     let redisConnectionPool: UnsafeTransfer<RedisConnectionPool>
     let configuration: Configuration
     let isStopped: ManagedAtomic<Bool>
+    let scripts: RedisScripts
 
     /// what to do with failed/processing jobs from last time queue was handled
     public enum JobCleanup: Sendable {
@@ -131,11 +133,12 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameters:
     ///   - redisConnectionPool: Redis connection pool
     ///   - configuration: configuration
-    public init(_ redisConnectionPool: RedisConnectionPool, configuration: Configuration = .init()) {
+    public init(_ redisConnectionPool: RedisConnectionPool, configuration: Configuration = .init(), logger: Logger) async throws {
         self.redisConnectionPool = .init(redisConnectionPool)
         self.configuration = configuration
         self.isStopped = .init(false)
         self.jobRegistry = .init()
+        self.scripts = try await Self.uploadScripts(redisConnectionPool: redisConnectionPool, logger: logger)
     }
 
     ///  Cleanup job queues
@@ -204,8 +207,11 @@ public final class RedisJobQueue: JobQueueDriver {
     }
 
     private func addToQueue(_ pendingJobID: PendingJobID, buffer: ByteBuffer) async throws {
-        try await self.set(jobID: pendingJobID.jobID, buffer: buffer)
-        _ = try await self.redisConnectionPool.wrappedValue.lpush(pendingJobID, into: self.configuration.queueKey).get()
+        _ = try await self.scripts.addToQueue.runScript(
+            on: self.redisConnectionPool.wrappedValue,
+            keys: [pendingJobID.jobID.redisKey, self.configuration.queueKey],
+            arguments: [.init(from: buffer), .init(from: pendingJobID)]
+        )
     }
 
     /// Flag job is done
@@ -214,8 +220,11 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameters:
     ///   - jobID: Job id
     public func finished(jobID: JobID) async throws {
-        _ = try await self.redisConnectionPool.wrappedValue.lrem(jobID.description, from: self.configuration.processingQueueKey, count: 0).get()
-        try await self.delete(jobID: jobID)
+        _ = try await self.scripts.delete.runScript(
+            on: self.redisConnectionPool.wrappedValue,
+            keys: [self.configuration.processingQueueKey, jobID.redisKey],
+            arguments: [.init(from: jobID.description)]
+        )
     }
 
     /// Flag job failed to process
@@ -224,8 +233,11 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameters:
     ///   - jobID: Job id
     public func failed(jobID: JobID, error: Error) async throws {
-        _ = try await self.redisConnectionPool.wrappedValue.lrem(jobID.redisKey, from: self.configuration.processingQueueKey, count: 0).get()
-        _ = try await self.redisConnectionPool.wrappedValue.lpush(jobID.redisKey, into: self.configuration.failedQueueKey).get()
+        _ = try await self.scripts.move.runScript(
+            on: self.redisConnectionPool.wrappedValue,
+            keys: [self.configuration.processingQueueKey, self.configuration.failedQueueKey],
+            arguments: [.init(from: jobID.redisKey)]
+        )
     }
 
     public func stop() async {
@@ -386,8 +398,12 @@ extension JobQueueDriver where Self == RedisJobQueue {
     /// - Parameters:
     ///   - redisConnectionPool: Redis connection pool
     ///   - configuration: configuration
-    public static func redis(_ redisConnectionPool: RedisConnectionPool, configuration: RedisJobQueue.Configuration = .init()) -> Self {
-        .init(redisConnectionPool, configuration: configuration)
+    public static func redis(
+        _ redisConnectionPool: RedisConnectionPool,
+        configuration: RedisJobQueue.Configuration = .init(),
+        logger: Logger
+    ) async throws -> Self {
+        try await .init(redisConnectionPool, configuration: configuration, logger: logger)
     }
 }
 
