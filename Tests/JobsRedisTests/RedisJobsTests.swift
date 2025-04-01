@@ -449,6 +449,24 @@ final class RedisJobsTests: XCTestCase {
         }
     }
 
+    func testRebuildScripts() async throws {
+        struct TestParameters: JobParameters {
+            static let jobName = "testBasic"
+            let value: Int
+        }
+        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 1)
+        try await self.testJobQueue(numWorkers: 1) { jobQueue in
+            jobQueue.registerJob(parameters: TestParameters.self) { parameters, context in
+                context.logger.info("Parameters=\(parameters)")
+                _ = try await jobQueue.queue.redisConnectionPool.wrappedValue.scriptFlush(.sync).get()
+                expectation.fulfill()
+            }
+            try await jobQueue.push(TestParameters(value: 1))
+
+            await self.fulfillment(of: [expectation], timeout: 5)
+        }
+    }
+
     func testMetadata() async throws {
         let logger = Logger(label: "Jobs")
         let redis = try createRedisConnectionPool(logger: logger)

@@ -28,9 +28,14 @@ struct RedisScripts {
         func runScript(
             on redisConnectionPool: RedisConnectionPool,
             keys: [RedisKey],
-            arguments: [RESPValue]
+            arguments: [RESPValue] = []
         ) async throws -> RESPValue {
-            try await redisConnectionPool.evalSHA(sha1, keys: keys, arguments: arguments).get()
+            do {
+                return try await redisConnectionPool.evalSHA(sha1, keys: keys, arguments: arguments).get()
+            } catch let error as RedisError where error.message.hasPrefix("(Redis) NOSCRIPT") {
+                _ = try await redisConnectionPool.scriptLoad(script).get()
+                return try await runScript(on: redisConnectionPool, keys: keys, arguments: arguments)
+            }
         }
     }
 
