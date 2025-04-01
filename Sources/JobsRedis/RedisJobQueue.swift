@@ -287,20 +287,16 @@ public final class RedisJobQueue: JobQueueDriver {
 
     /// Push all the entries from list back onto the main list.
     func rerunQueue(queueKey: RedisKey) async throws {
-        while true {
-            let key = try await self.redisConnectionPool.wrappedValue.rpop(from: queueKey).get()
-            if key.isNull {
-                break
-            }
-            guard let key = String(fromRESP: key) else {
-                throw RedisQueueError.unexpectedRedisKeyType
-            }
-            _ = try await self.redisConnectionPool.wrappedValue.zadd((key, 0), to: self.configuration.queueKey).get()
-        }
+        _ = try await self.scripts.rerunQueue.runScript(
+            on: self.redisConnectionPool.wrappedValue,
+            keys: [queueKey, self.configuration.queueKey],
+            arguments: []
+        )
     }
 
     /// Delete all entries from queue
     func removeQueue(queueKey: RedisKey) async throws {
+        // Cannot use a script for this as it edits keys that are not input keys
         while true {
             let key = try await self.redisConnectionPool.wrappedValue.rpop(from: queueKey).get()
             if key.isNull {
@@ -316,10 +312,6 @@ public final class RedisJobQueue: JobQueueDriver {
 
     func get(jobID: JobID) async throws -> ByteBuffer? {
         try await self.redisConnectionPool.wrappedValue.get(jobID.redisKey).get().byteBuffer
-    }
-
-    func set(jobID: JobID, buffer: ByteBuffer) async throws {
-        try await self.redisConnectionPool.wrappedValue.set(jobID.redisKey, to: buffer).get()
     }
 
     func delete(jobID: JobID) async throws {
