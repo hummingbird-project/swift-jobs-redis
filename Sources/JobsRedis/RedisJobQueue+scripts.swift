@@ -45,6 +45,7 @@ struct RedisScripts {
     let moveToPending: RedisScript
     let pop: RedisScript
     let delete: RedisScript
+    let cancel: RedisScript
     let rerunQueue: RedisScript
 }
 
@@ -102,6 +103,14 @@ extension RedisJobQueue {
             delete: .init(
                 """
                 redis.call("LREM", KEYS[1], 0, ARGV[1])
+                redis.call("DEL", KEYS[2])
+                return redis.status_reply('OK')
+                """,
+                redisConnectionPool: redisConnectionPool
+            ),
+            cancel: .init(
+                """
+                redis.call("ZREM", KEYS[1], ARGV[1])
                 redis.call("DEL", KEYS[2])
                 return redis.status_reply('OK')
                 """,

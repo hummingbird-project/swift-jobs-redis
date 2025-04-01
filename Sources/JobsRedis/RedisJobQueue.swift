@@ -24,7 +24,7 @@ import class Foundation.JSONDecoder
 import struct Foundation.UUID
 
 /// Redis implementation of job queue driver
-public final class RedisJobQueue: JobQueueDriver {
+public final class RedisJobQueue: JobQueueDriver, CancellableJobQueue {
     public struct JobID: Sendable, CustomStringConvertible, Equatable, RESPValueConvertible {
         let value: String
 
@@ -202,6 +202,19 @@ public final class RedisJobQueue: JobQueueDriver {
         _ = try await self.scripts.moveToFailed.runScript(
             on: self.redisConnectionPool.wrappedValue,
             keys: [self.configuration.processingQueueKey, self.configuration.failedQueueKey],
+            arguments: [.init(from: jobID.redisKey)]
+        )
+    }
+
+    /// Cancels a job
+    ///
+    /// Removes it from the pending queue
+    /// - Parameters:
+    ///  - jobID: Job id
+    public func cancel(jobID: JobID) async throws {
+        _ = try await self.scripts.cancel.runScript(
+            on: self.redisConnectionPool.wrappedValue,
+            keys: [self.configuration.queueKey, jobID.redisKey],
             arguments: [.init(from: jobID.redisKey)]
         )
     }
