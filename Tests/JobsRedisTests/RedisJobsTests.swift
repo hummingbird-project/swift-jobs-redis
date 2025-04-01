@@ -162,7 +162,7 @@ final class RedisJobsTests: XCTestCase {
         struct TestParameters: JobParameters {
             static let jobName = "testErrorRetryCount"
         }
-        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 4)
+        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 3)
         struct FailedError: Error {}
         try await self.testJobQueue(numWorkers: 1) { jobQueue in
             jobQueue.registerJob(
@@ -242,18 +242,6 @@ final class RedisJobsTests: XCTestCase {
 
             await self.fulfillment(of: [expectation], timeout: 5)
         }
-    }
-
-    func testJobId() async throws {
-        let job = RedisJobQueue.PendingJobID(jobID: .init(), delayUntil: nil)
-        XCTAssertEqual(job.delayUntil, 0)
-        XCTAssertEqual(job.isDelayed(), false)
-        let futureDate = Date().addingTimeInterval(100)
-        let delayedJob = RedisJobQueue.PendingJobID(jobID: .init(), delayUntil: futureDate)
-        XCTAssertEqual(delayedJob.isDelayed(), true)
-        let respValue = delayedJob.convertedToRESPValue()
-        let delayedJob2 = RedisJobQueue.PendingJobID(fromRESP: respValue)
-        XCTAssertEqual(delayedJob, delayedJob2)
     }
 
     func testDelayedJob() async throws {
@@ -337,7 +325,7 @@ final class RedisJobsTests: XCTestCase {
         }
     }
 
-    /// creates job that errors on first attempt, and is left on processing queue and
+    /// creates job that errors on first attempt, and is left on failed queue and
     /// is then rerun on startup of new server
     func testRerunAtStartup() async throws {
         struct TestParameters: JobParameters {
@@ -363,7 +351,7 @@ final class RedisJobsTests: XCTestCase {
 
             await self.fulfillment(of: [failedExpectation], timeout: 10)
 
-            // stall to give job chance to start running
+            // stall to give job chance for job to be pushed to failed queue
             try await Task.sleep(for: .milliseconds(50))
 
             XCTAssertFalse(firstTime.load(ordering: .relaxed))
@@ -374,6 +362,34 @@ final class RedisJobsTests: XCTestCase {
             jobQueue.registerJob(job)
             await self.fulfillment(of: [succeededExpectation], timeout: 10)
             XCTAssertTrue(finished.load(ordering: .relaxed))
+        }
+    }
+
+    /// creates job that errors on first attempt, and is left on failed queue and
+    /// is then removed on startup of new server
+    func testRemoveAtStartup() async throws {
+        struct TestParameters: JobParameters {
+            static let jobName = "testRemoveAtStartup"
+        }
+        struct RetryError: Error {}
+        let failedExpectation = XCTestExpectation(description: "TestJob failed", expectedFulfillmentCount: 1)
+        let job = JobDefinition(parameters: TestParameters.self) { _, _ in
+            failedExpectation.fulfill()
+            throw RetryError()
+        }
+        try await self.testJobQueue(numWorkers: 4) { jobQueue in
+            jobQueue.registerJob(job)
+
+            try await jobQueue.push(TestParameters())
+
+            await self.fulfillment(of: [failedExpectation], timeout: 10)
+
+            // stall to give job chance for job to be pushed to failed queue
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        try await self.testJobQueue(numWorkers: 4, failedJobsInitialization: .remove) { jobQueue in
+            jobQueue.registerJob(job)
         }
     }
 
