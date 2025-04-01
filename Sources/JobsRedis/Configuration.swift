@@ -20,6 +20,7 @@ extension RedisJobQueue {
     public struct Configuration: Sendable {
         let queueKey: RedisKey
         let processingQueueKey: RedisKey
+        let pausedQueueKey: RedisKey
         let failedQueueKey: RedisKey
         let metadataKeyPrefix: String
         let pollTime: Duration
@@ -29,6 +30,7 @@ extension RedisJobQueue {
             pollTime: Duration = .milliseconds(100)
         ) {
             self.queueKey = RedisKey("\(queueKey).pending")
+            self.pausedQueueKey = RedisKey("\(queueKey).paused")
             self.processingQueueKey = RedisKey("\(queueKey).processing")
             self.failedQueueKey = RedisKey("\(queueKey).failed")
             self.metadataKeyPrefix = "\(queueKey).metadata"

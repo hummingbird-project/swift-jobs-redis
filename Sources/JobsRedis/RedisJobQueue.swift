@@ -346,6 +346,49 @@ extension RedisJobQueue {
     }
 }
 
+extension RedisJobQueue: CancellableJobQueue {
+    /// Cancels a job
+    ///
+    /// Removes it from the pending queue
+    /// - Parameters:
+    ///  - jobID: Job id
+    public func cancel(jobID: JobID) async throws {
+        _ = try await self.scripts.cancel.runScript(
+            on: self.redisConnectionPool.wrappedValue,
+            keys: [self.configuration.queueKey, jobID.redisKey],
+            arguments: [.init(from: jobID.redisKey)]
+        )
+    }
+}
+
+extension RedisJobQueue: ResumableJobQueue {
+    /// Temporarily remove job from pending queue
+    ///
+    /// Removes it from the pending queue, adds to paused queue
+    /// - Parameters:
+    ///  - jobID: Job id
+    public func pause(jobID: JobID) async throws {
+        _ = try await self.scripts.pauseResume.runScript(
+            on: self.redisConnectionPool.wrappedValue,
+            keys: [self.configuration.queueKey, self.configuration.pausedQueueKey],
+            arguments: [.init(from: jobID.redisKey)]
+        )
+    }
+
+    /// Moved paused job back onto pending queue
+    ///
+    /// Removes it from the paused queue, adds to pending queue
+    /// - Parameters:
+    ///  - jobID: Job id
+    public func resume(jobID: JobID) async throws {
+        _ = try await self.scripts.pauseResume.runScript(
+            on: self.redisConnectionPool.wrappedValue,
+            keys: [self.configuration.pausedQueueKey, self.configuration.queueKey],
+            arguments: [.init(from: jobID.redisKey)]
+        )
+    }
+}
+
 extension JobQueueDriver where Self == RedisJobQueue {
     /// Return Redis driver for Job Queue
     /// - Parameters:
