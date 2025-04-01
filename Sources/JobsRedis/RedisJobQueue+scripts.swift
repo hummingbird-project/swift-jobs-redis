@@ -35,7 +35,9 @@ struct RedisScripts {
     }
 
     let addToQueue: RedisScript
-    let move: RedisScript
+    let moveToProcessing: RedisScript
+    let moveToFailed: RedisScript
+    let moveToPending: RedisScript
     let delete: RedisScript
 }
 
@@ -46,14 +48,28 @@ extension RedisJobQueue {
             addToQueue: .init(
                 """
                 redis.call("SET", KEYS[1], ARGV[1])
-                redis.call("ZADD", KEYS[2], ARGV[2], ARGV[3])
+                redis.call("ZADD", KEYS[2], ARGV[3], ARGV[2])
                 """,
                 redisConnectionPool: redisConnectionPool
             ),
-            move: .init(
+            moveToProcessing: .init(
                 """
                 redis.call("LREM", KEYS[1], 0, ARGV[1])
                 redis.call("LPUSH", KEYS[2], ARGV[1])
+                """,
+                redisConnectionPool: redisConnectionPool
+            ),
+            moveToFailed: .init(
+                """
+                redis.call("LREM", KEYS[1], 0, ARGV[1])
+                redis.call("LPUSH", KEYS[2], ARGV[1])
+                """,
+                redisConnectionPool: redisConnectionPool
+            ),
+            moveToPending: .init(
+                """
+                redis.call("LREM", KEYS[1], 0, ARGV[1])
+                redis.call("ZADD", KEYS[2], 0, ARGV[2])
                 """,
                 redisConnectionPool: redisConnectionPool
             ),
@@ -66,8 +82,10 @@ extension RedisJobQueue {
             )
         )
         logger.debug("AddToQueue script with SHA1 \(scripts.addToQueue.sha1)")
-        logger.debug("Move script with SHA1 \(scripts.move.sha1)")
-        logger.debug("Move script with SHA1 \(scripts.delete.sha1)")
+        logger.debug("Move to processing script with SHA1 \(scripts.moveToProcessing.sha1)")
+        logger.debug("Move to failed script with SHA1 \(scripts.moveToFailed.sha1)")
+        logger.debug("Move to pending script with SHA1 \(scripts.moveToPending.sha1)")
+        logger.debug("Delete script with SHA1 \(scripts.delete.sha1)")
         return scripts
     }
 }

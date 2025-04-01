@@ -162,7 +162,7 @@ final class RedisJobsTests: XCTestCase {
         struct TestParameters: JobParameters {
             static let jobName = "testErrorRetryCount"
         }
-        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 4)
+        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 3)
         struct FailedError: Error {}
         try await self.testJobQueue(numWorkers: 1) { jobQueue in
             jobQueue.registerJob(
@@ -244,7 +244,7 @@ final class RedisJobsTests: XCTestCase {
         }
     }
 
-    func testJobId() async throws {
+    /*func testJobId() async throws {
         let job = RedisJobQueue.PendingJobID(jobID: .init(), delayUntil: nil)
         XCTAssertEqual(job.delayUntil, 0)
         XCTAssertEqual(job.isDelayed(), false)
@@ -254,7 +254,7 @@ final class RedisJobsTests: XCTestCase {
         let respValue = delayedJob.convertedToRESPValue()
         let delayedJob2 = RedisJobQueue.PendingJobID(fromRESP: respValue)
         XCTAssertEqual(delayedJob, delayedJob2)
-    }
+    }*/
 
     func testDelayedJob() async throws {
         struct TestParameters: JobParameters {

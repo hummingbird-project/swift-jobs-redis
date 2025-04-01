@@ -70,48 +70,6 @@ public final class RedisJobQueue: JobQueueDriver {
         }
     }
 
-    public struct PendingJobID: RESPValueConvertible, Equatable {
-        let jobID: JobID
-        let delayUntil: Int64
-
-        public init(jobID: JobID, delayUntil: Date?) {
-            self.jobID = .init()
-            self.delayUntil = Self.toMilliseconds(value: delayUntil?.timeIntervalSince1970)
-        }
-
-        public init?(fromRESP value: RediStack.RESPValue) {
-            guard let string = String(fromRESP: value) else { return nil }
-            let parts = string.components(separatedBy: ":")
-            self.jobID = .init(value: parts[0])
-            self.delayUntil =
-                if parts.count > 1 {
-                    Self.toMillisecondsFromString(value: parts[1])
-                } else {
-                    0
-                }
-        }
-
-        public func convertedToRESPValue() -> RediStack.RESPValue {
-            "\(self.jobID):\(self.delayUntil)".convertedToRESPValue()
-        }
-
-        static func toMilliseconds(value: Double?) -> Int64 {
-            if let value {
-                return Double(value * 1000) < Double(Int64.max) ? Int64(value * 1000) : Int64.max
-            }
-            return 0
-        }
-
-        static func toMillisecondsFromString(value: String) -> Int64 {
-            Int64(value) ?? 0
-        }
-
-        func isDelayed() -> Bool {
-            let now = Self.toMilliseconds(value: Date.now.timeIntervalSince1970)
-            return self.delayUntil > now
-        }
-    }
-
     public enum RedisQueueError: Error, CustomStringConvertible {
         case unexpectedRedisKeyType
         case jobMissing(JobID)
@@ -211,10 +169,9 @@ public final class RedisJobQueue: JobQueueDriver {
     /// Helper for enqueuing jobs
     private func push<Parameters>(jobID: JobID, jobRequest: JobRequest<Parameters>, options: JobOptions) async throws {
         let buffer = try self.jobRegistry.encode(jobRequest: jobRequest)
-        let pendingJobID = PendingJobID(jobID: jobID, delayUntil: options.delayUntil)
         _ = try await self.scripts.addToQueue.runScript(
             on: self.redisConnectionPool.wrappedValue,
-            keys: [pendingJobID.jobID.redisKey, self.configuration.queueKey],
+            keys: [jobID.redisKey, self.configuration.queueKey],
             arguments: [
                 .init(from: buffer),
                 .init(from: jobID.redisKey),
@@ -242,7 +199,7 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameters:
     ///   - jobID: Job id
     public func failed(jobID: JobID, error: Error) async throws {
-        _ = try await self.scripts.move.runScript(
+        _ = try await self.scripts.moveToFailed.runScript(
             on: self.redisConnectionPool.wrappedValue,
             keys: [self.configuration.processingQueueKey, self.configuration.failedQueueKey],
             arguments: [.init(from: jobID.redisKey)]
@@ -343,10 +300,10 @@ public final class RedisJobQueue: JobQueueDriver {
                 if key.isNull {
                     break
                 }
-                guard let key = PendingJobID(fromRESP: key) else {
+                guard let jobID = JobID(fromRESP: key) else {
                     throw RedisQueueError.unexpectedRedisKeyType
                 }
-                try await self.delete(jobID: key.jobID)
+                try await self.delete(jobID: jobID)
             }
         default:
             break
@@ -356,14 +313,18 @@ public final class RedisJobQueue: JobQueueDriver {
     /// Push all the entries from list back onto the main list.
     func rerunQueue(queueKey: RedisKey) async throws {
         while true {
-            let key = try await self.redisConnectionPool.wrappedValue.rpoplpush(from: queueKey, to: self.configuration.queueKey).get()
+            let key = try await self.redisConnectionPool.wrappedValue.rpop(from: queueKey).get()
             if key.isNull {
-                return
+                break
             }
+            guard let key = String(fromRESP: key) else {
+                throw RedisQueueError.unexpectedRedisKeyType
+            }
+            _ = try await self.redisConnectionPool.wrappedValue.zadd((key, 0), to: self.configuration.queueKey).get()
         }
     }
 
-    /// Push all the entries from list back onto the main list.
+    /// Delete all entries from queue
     func removeQueue(queueKey: RedisKey) async throws {
         while true {
             let key = try await self.redisConnectionPool.wrappedValue.rpop(from: queueKey).get()
