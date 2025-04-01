@@ -38,6 +38,7 @@ struct RedisScripts {
     let moveToProcessing: RedisScript
     let moveToFailed: RedisScript
     let moveToPending: RedisScript
+    let pop: RedisScript
     let delete: RedisScript
 }
 
@@ -73,6 +74,19 @@ extension RedisJobQueue {
                 """,
                 redisConnectionPool: redisConnectionPool
             ),
+            pop: .init(
+                """
+                local values = redis.call("ZPOPMIN", KEYS[1])
+                if values[2] == nil then return nil end
+                if values[2] > ARGV[1] then
+                    redis.call("ZADD", KEYS[1], 0, values[1])
+                    return nil
+                end
+                redis.call("LPUSH", KEYS[2], values[1])
+                return values[1]
+                """,
+                redisConnectionPool: redisConnectionPool
+            ),
             delete: .init(
                 """
                 redis.call("LREM", KEYS[1], 0, ARGV[1])
@@ -85,6 +99,7 @@ extension RedisJobQueue {
         logger.debug("Move to processing script with SHA1 \(scripts.moveToProcessing.sha1)")
         logger.debug("Move to failed script with SHA1 \(scripts.moveToFailed.sha1)")
         logger.debug("Move to pending script with SHA1 \(scripts.moveToPending.sha1)")
+        logger.debug("Pop script with SHA1 \(scripts.pop.sha1)")
         logger.debug("Delete script with SHA1 \(scripts.delete.sha1)")
         return scripts
     }
