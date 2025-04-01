@@ -121,10 +121,10 @@ extension RedisJobQueue {
                 """
                 local score = redis.call("ZSCORE", KEYS[1], ARGV[1])
                 if score == nil then
-                    return nil
+                   return nil
                 end
                 redis.call("ZREM", KEYS[1], ARGV[1])
-                redis.call("ZADD", score, KEYS[2])
+                redis.call("ZADD", KEYS[2], score, ARGV[1])
                 return redis.status_reply('OK')
                 """,
                 redisConnectionPool: redisConnectionPool

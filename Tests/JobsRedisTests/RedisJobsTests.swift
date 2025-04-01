@@ -476,8 +476,10 @@ final class RedisJobsTests: XCTestCase {
         let jobProcessed: NIOLockedValueBox<[Int]> = .init([])
         var logger = Logger(label: "JobsTests")
         logger.logLevel = .trace
-        let jobQueue = JobQueue(
-            .memory,
+        let redis = try createRedisConnectionPool(logger: logger)
+        let redisService = RedisConnectionPoolService(redis)
+        let jobQueue = try await JobQueue(
+            .redis(redis, configuration: .init(queueKey: "MyJobQueue", pollTime: .milliseconds(50)), logger: logger),
             logger: logger
         )
         jobQueue.registerJob(
@@ -492,16 +494,15 @@ final class RedisJobsTests: XCTestCase {
         try await withThrowingTaskGroup(of: Void.self) { group in
             let serviceGroup = ServiceGroup(
                 configuration: .init(
-                    services: [jobQueue],
+                    services: [redisService, jobQueue],
                     gracefulShutdownSignals: [.sigterm, .sigint],
                     logger: Logger(label: "JobQueueService")
                 )
             )
+            try await jobQueue.queue.cleanup(failedJobs: .remove, processingJobs: .remove, pendingJobs: .remove)
 
             let cancellable = try await jobQueue.push(TestParameters(value: 30))
-
             try await jobQueue.push(TestParameters(value: 15))
-
             try await jobQueue.cancelJob(jobID: cancellable)
 
             group.addTask {
@@ -519,12 +520,14 @@ final class RedisJobsTests: XCTestCase {
             static let jobName = "testPausedAndThenResume"
             let value: Int
         }
-        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 2)
+        let counter = Counter()
         let jobRunSequence: NIOLockedValueBox<[Int]> = .init([])
         var logger = Logger(label: "JobsTests")
         logger.logLevel = .trace
-        let jobQueue = JobQueue(
-            .memory,
+        let redis = try createRedisConnectionPool(logger: logger)
+        let redisService = RedisConnectionPoolService(redis)
+        let jobQueue = try await JobQueue(
+            .redis(redis, configuration: .init(queueKey: "MyJobQueue", pollTime: .milliseconds(50)), logger: logger),
             logger: logger
         )
         jobQueue.registerJob(
@@ -535,30 +538,29 @@ final class RedisJobsTests: XCTestCase {
             jobRunSequence.withLockedValue {
                 $0.append(parameters.value)
             }
-            expectation.fulfill()
+            counter.increment()
         }
 
         try await withThrowingTaskGroup(of: Void.self) { group in
             let serviceGroup = ServiceGroup(
                 configuration: .init(
-                    services: [jobQueue],
+                    services: [redisService, jobQueue],
                     gracefulShutdownSignals: [.sigterm, .sigint],
                     logger: Logger(label: "JobQueueService")
                 )
             )
+            try await jobQueue.queue.cleanup(failedJobs: .remove, processingJobs: .remove, pendingJobs: .remove)
 
             let pausableJob = try await jobQueue.push(TestParameters(value: 15))
-
             try await jobQueue.push(TestParameters(value: 30))
-
             try await jobQueue.pauseJob(jobID: pausableJob)
 
             group.addTask {
                 try await serviceGroup.run()
             }
-
+            try await counter.waitFor(count: 1)
             try await jobQueue.resumeJob(jobID: pausableJob)
-            await fulfillment(of: [expectation], timeout: 5)
+            try await counter.waitFor(count: 1)
             await serviceGroup.triggerGracefulShutdown()
         }
         XCTAssertEqual(jobRunSequence.withLockedValue { $0 }, [30, 15])
@@ -593,5 +595,35 @@ struct RedisConnectionPoolService: Service {
         let promise = self.pool.eventLoop.makePromise(of: Void.self)
         self.pool.close(promise: promise)
         return try await promise.futureResult.get()
+    }
+}
+
+struct Counter {
+    let stream: AsyncStream<Void>
+    let continuation: AsyncStream<Void>.Continuation
+
+    init() {
+        (self.stream, self.continuation) = AsyncStream.makeStream(of: Void.self)
+    }
+
+    func increment() {
+        self.continuation.yield()
+    }
+
+    func waitFor(count: Int, timeout: Duration = .seconds(5)) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                var iterator = stream.makeAsyncIterator()
+                for _ in 0..<count {
+                    _ = await iterator.next()
+                }
+
+            }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+            }
+            try await group.next()
+            group.cancelAll()
+        }
     }
 }
