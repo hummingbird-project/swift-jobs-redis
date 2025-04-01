@@ -218,7 +218,7 @@ public final class RedisJobQueue: JobQueueDriver {
             arguments: [
                 .init(from: buffer),
                 .init(from: jobID.redisKey),
-                .init(from: options.delayUntil?.timeIntervalSinceReferenceDate ?? Date.now.timeIntervalSinceReferenceDate),
+                .init(from: options.delayUntil?.timeIntervalSince1970 ?? Date.now.timeIntervalSince1970),
             ]
         )
     }
@@ -293,22 +293,22 @@ public final class RedisJobQueue: JobQueueDriver {
         let jobID = pendingJobID.jobID
         _ = try await pool.lpush(jobID.redisKey, into: self.configuration.processingQueueKey).get()*/
 
-        let pool = self.redisConnectionPool.wrappedValue
-        guard let values = try await pool._zpopmin(from: self.configuration.queueKey).get() else {
+        let values = try await self.redisConnectionPool.wrappedValue._zpopmin(count: 1, from: self.configuration.queueKey).get()
+        guard let value = values.first else {
             return nil
         }
-        guard let jobID = JobID(fromRESP: values.0) else {
+        guard let jobID = JobID(fromRESP: value.0) else {
             throw RedisQueueError.unexpectedRedisKeyType
         }
-        let score = values.1
+        let score = value.1
         guard Date.now.timeIntervalSince1970 > score else {
-            _ = try await pool.zadd(
+            _ = try await self.redisConnectionPool.wrappedValue.zadd(
                 (element: jobID, score: score),
                 to: self.configuration.queueKey
             ).get()
             return nil
         }
-        _ = try await pool.lpush(jobID.redisKey, into: self.configuration.processingQueueKey).get()
+        _ = try await self.redisConnectionPool.wrappedValue.lpush(jobID.redisKey, into: self.configuration.processingQueueKey).get()
 
         if let buffer = try await self.get(jobID: jobID) {
             do {
@@ -447,5 +447,34 @@ extension ByteBuffer {
 
     public func convertedToRESPValue() -> RESPValue {
         .bulkString(self)
+    }
+}
+
+extension RedisClient {
+    /// The version of zpopmin in RediStack does not work, so until a fix is merged I have
+    /// implemented a version of it here
+    @inlinable
+    public func _zpopmin(
+        count: Int,
+        from key: RedisKey
+    ) -> EventLoopFuture<[(RESPValue, Double)]> {
+        let args: [RESPValue] = [
+            .init(from: key),
+            .init(from: count),
+        ]
+        return self.send(command: "ZPOPMIN", with: args).flatMapThrowing { value in
+            guard let values = [RESPValue](fromRESP: value) else { throw RedisClientError.failedRESPConversion(to: [RESPValue].self) }
+            var index = 0
+            var result: [(RESPValue, Double)] = .init()
+            while index < values.count - 1 {
+                guard let score = Double(fromRESP: values[index + 1]) else {
+                    throw RedisClientError.assertionFailure(message: "Unexpected response: '\(values[index + 1])'")
+                }
+                let value = values[index]
+                result.append((value, score))
+                index += 2
+            }
+            return result
+        }
     }
 }
