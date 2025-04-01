@@ -233,23 +233,6 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameter eventLoop: eventLoop to do work on
     /// - Returns: queued job
     func popFirst() async throws -> JobQueueResult<JobID>? {
-        /*let pool = self.redisConnectionPool.wrappedValue
-        let pendingJobKey = try await pool.rpop(from: self.configuration.queueKey).get()
-        guard !pendingJobKey.isNull else {
-            return nil
-        }
-        
-        guard let pendingJobID = PendingJobID(fromRESP: pendingJobKey) else {
-            throw RedisQueueError.unexpectedRedisKeyType
-        }
-        
-        guard !pendingJobID.isDelayed() else {
-            _ = try await pool.lpush(pendingJobID, into: self.configuration.queueKey).get()
-            return nil
-        }
-        let jobID = pendingJobID.jobID
-        _ = try await pool.lpush(jobID.redisKey, into: self.configuration.processingQueueKey).get()*/
-
         let values = try await self.redisConnectionPool.wrappedValue._zpopmin(count: 1, from: self.configuration.queueKey).get()
         guard let value = values.first else {
             return nil
