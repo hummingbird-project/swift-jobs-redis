@@ -25,7 +25,7 @@ import struct Foundation.UUID
 
 /// Redis implementation of job queue driver
 public final class RedisJobQueue: JobQueueDriver {
-    public struct JobID: Sendable, CustomStringConvertible, Equatable {
+    public struct JobID: Sendable, CustomStringConvertible, Equatable, RESPValueConvertible {
         let value: String
 
         init() {
@@ -34,6 +34,15 @@ public final class RedisJobQueue: JobQueueDriver {
 
         init(value: String) {
             self.value = value
+        }
+
+        public init?(fromRESP value: RediStack.RESPValue) {
+            guard let string = String(fromRESP: value) else { return nil }
+            self.value = string
+        }
+
+        public func convertedToRESPValue() -> RediStack.RESPValue {
+            self.value.convertedToRESPValue()
         }
 
         var redisKey: RedisKey { .init(self.description) }
@@ -58,48 +67,6 @@ public final class RedisJobQueue: JobQueueDriver {
         /// - Parameter delayUntil: Whether job execution should be delayed until a later date
         public init(delayUntil: Date?) {
             self.delayUntil = delayUntil
-        }
-    }
-
-    public struct PendingJobID: RESPValueConvertible, Equatable {
-        let jobID: JobID
-        let delayUntil: Int64
-
-        public init(jobID: JobID, delayUntil: Date?) {
-            self.jobID = .init()
-            self.delayUntil = Self.toMilliseconds(value: delayUntil?.timeIntervalSince1970)
-        }
-
-        public init?(fromRESP value: RediStack.RESPValue) {
-            guard let string = String(fromRESP: value) else { return nil }
-            let parts = string.components(separatedBy: ":")
-            self.jobID = .init(value: parts[0])
-            self.delayUntil =
-                if parts.count > 1 {
-                    Self.toMillisecondsFromString(value: parts[1])
-                } else {
-                    0
-                }
-        }
-
-        public func convertedToRESPValue() -> RediStack.RESPValue {
-            "\(self.jobID):\(self.delayUntil)".convertedToRESPValue()
-        }
-
-        static func toMilliseconds(value: Double?) -> Int64 {
-            if let value {
-                return Double(value * 1000) < Double(Int64.max) ? Int64(value * 1000) : Int64.max
-            }
-            return 0
-        }
-
-        static func toMillisecondsFromString(value: String) -> Int64 {
-            Int64(value) ?? 0
-        }
-
-        func isDelayed() -> Bool {
-            let now = Self.toMilliseconds(value: Date.now.timeIntervalSince1970)
-            return self.delayUntil > now
         }
     }
 
@@ -202,15 +169,14 @@ public final class RedisJobQueue: JobQueueDriver {
     /// Helper for enqueuing jobs
     private func push<Parameters>(jobID: JobID, jobRequest: JobRequest<Parameters>, options: JobOptions) async throws {
         let buffer = try self.jobRegistry.encode(jobRequest: jobRequest)
-        let pendingJobID = PendingJobID(jobID: jobID, delayUntil: options.delayUntil)
-        try await self.addToQueue(pendingJobID, buffer: buffer)
-    }
-
-    private func addToQueue(_ pendingJobID: PendingJobID, buffer: ByteBuffer) async throws {
         _ = try await self.scripts.addToQueue.runScript(
             on: self.redisConnectionPool.wrappedValue,
-            keys: [pendingJobID.jobID.redisKey, self.configuration.queueKey],
-            arguments: [.init(from: buffer), .init(from: pendingJobID)]
+            keys: [jobID.redisKey, self.configuration.queueKey],
+            arguments: [
+                .init(from: buffer),
+                .init(from: jobID.redisKey),
+                .init(from: options.delayUntil?.timeIntervalSince1970 ?? Date.now.timeIntervalSince1970),
+            ]
         )
     }
 
@@ -223,7 +189,7 @@ public final class RedisJobQueue: JobQueueDriver {
         _ = try await self.scripts.delete.runScript(
             on: self.redisConnectionPool.wrappedValue,
             keys: [self.configuration.processingQueueKey, jobID.redisKey],
-            arguments: [.init(from: jobID.description)]
+            arguments: [.init(from: jobID.redisKey)]
         )
     }
 
@@ -233,7 +199,7 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameters:
     ///   - jobID: Job id
     public func failed(jobID: JobID, error: Error) async throws {
-        _ = try await self.scripts.move.runScript(
+        _ = try await self.scripts.moveToFailed.runScript(
             on: self.redisConnectionPool.wrappedValue,
             keys: [self.configuration.processingQueueKey, self.configuration.failedQueueKey],
             arguments: [.init(from: jobID.redisKey)]
@@ -267,23 +233,14 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameter eventLoop: eventLoop to do work on
     /// - Returns: queued job
     func popFirst() async throws -> JobQueueResult<JobID>? {
-        let pool = self.redisConnectionPool.wrappedValue
-        let pendingJobKey = try await pool.rpop(from: self.configuration.queueKey).get()
-        guard !pendingJobKey.isNull else {
+        let value = try await self.scripts.pop.runScript(
+            on: self.redisConnectionPool.wrappedValue,
+            keys: [self.configuration.queueKey, self.configuration.processingQueueKey],
+            arguments: [.init(from: Date.now.timeIntervalSince1970)]
+        )
+        guard let jobID = JobID(fromRESP: value) else {
             return nil
         }
-
-        guard let pendingJobID = PendingJobID(fromRESP: pendingJobKey) else {
-            throw RedisQueueError.unexpectedRedisKeyType
-        }
-
-        guard !pendingJobID.isDelayed() else {
-            _ = try await pool.lpush(pendingJobID, into: self.configuration.queueKey).get()
-            return nil
-        }
-        let jobID = pendingJobID.jobID
-
-        _ = try await pool.lpush(jobID.redisKey, into: self.configuration.processingQueueKey).get()
 
         if let buffer = try await self.get(jobID: jobID) {
             do {
@@ -314,14 +271,14 @@ public final class RedisJobQueue: JobQueueDriver {
         switch onInit {
         case .remove:
             while true {
-                let key = try await self.redisConnectionPool.wrappedValue.rpop(from: queueKey).get()
-                if key.isNull {
+                let values = try await self.redisConnectionPool.wrappedValue._zpopmin(count: 1, from: self.configuration.queueKey).get()
+                guard let value = values.first else {
                     break
                 }
-                guard let key = PendingJobID(fromRESP: key) else {
+                guard let jobID = JobID(fromRESP: value.0) else {
                     throw RedisQueueError.unexpectedRedisKeyType
                 }
-                try await self.delete(jobID: key.jobID)
+                try await self.delete(jobID: jobID)
             }
         default:
             break
@@ -330,16 +287,16 @@ public final class RedisJobQueue: JobQueueDriver {
 
     /// Push all the entries from list back onto the main list.
     func rerunQueue(queueKey: RedisKey) async throws {
-        while true {
-            let key = try await self.redisConnectionPool.wrappedValue.rpoplpush(from: queueKey, to: self.configuration.queueKey).get()
-            if key.isNull {
-                return
-            }
-        }
+        _ = try await self.scripts.rerunQueue.runScript(
+            on: self.redisConnectionPool.wrappedValue,
+            keys: [queueKey, self.configuration.queueKey],
+            arguments: []
+        )
     }
 
-    /// Push all the entries from list back onto the main list.
+    /// Delete all entries from queue
     func removeQueue(queueKey: RedisKey) async throws {
+        // Cannot use a script for this as it edits keys that are not input keys
         while true {
             let key = try await self.redisConnectionPool.wrappedValue.rpop(from: queueKey).get()
             if key.isNull {
@@ -355,10 +312,6 @@ public final class RedisJobQueue: JobQueueDriver {
 
     func get(jobID: JobID) async throws -> ByteBuffer? {
         try await self.redisConnectionPool.wrappedValue.get(jobID.redisKey).get().byteBuffer
-    }
-
-    func set(jobID: JobID, buffer: ByteBuffer) async throws {
-        try await self.redisConnectionPool.wrappedValue.set(jobID.redisKey, to: buffer).get()
     }
 
     func delete(jobID: JobID) async throws {
@@ -422,5 +375,34 @@ extension ByteBuffer {
 
     public func convertedToRESPValue() -> RESPValue {
         .bulkString(self)
+    }
+}
+
+extension RedisClient {
+    /// The version of zpopmin in RediStack does not work, so until a fix is merged I have
+    /// implemented a version of it here
+    @inlinable
+    public func _zpopmin(
+        count: Int,
+        from key: RedisKey
+    ) -> EventLoopFuture<[(RESPValue, Double)]> {
+        let args: [RESPValue] = [
+            .init(from: key),
+            .init(from: count),
+        ]
+        return self.send(command: "ZPOPMIN", with: args).flatMapThrowing { value in
+            guard let values = [RESPValue](fromRESP: value) else { throw RedisClientError.failedRESPConversion(to: [RESPValue].self) }
+            var index = 0
+            var result: [(RESPValue, Double)] = .init()
+            while index < values.count - 1 {
+                guard let score = Double(fromRESP: values[index + 1]) else {
+                    throw RedisClientError.assertionFailure(message: "Unexpected response: '\(values[index + 1])'")
+                }
+                let value = values[index]
+                result.append((value, score))
+                index += 2
+            }
+            return result
+        }
     }
 }
