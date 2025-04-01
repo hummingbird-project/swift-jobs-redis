@@ -296,11 +296,11 @@ public final class RedisJobQueue: JobQueueDriver {
         switch onInit {
         case .remove:
             while true {
-                let key = try await self.redisConnectionPool.wrappedValue.rpop(from: queueKey).get()
-                if key.isNull {
+                let values = try await self.redisConnectionPool.wrappedValue._zpopmin(count: 1, from: self.configuration.queueKey).get()
+                guard let value = values.first else {
                     break
                 }
-                guard let jobID = JobID(fromRESP: key) else {
+                guard let jobID = JobID(fromRESP: value.0) else {
                     throw RedisQueueError.unexpectedRedisKeyType
                 }
                 try await self.delete(jobID: jobID)
