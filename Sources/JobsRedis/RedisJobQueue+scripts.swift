@@ -46,6 +46,7 @@ struct RedisScripts {
     let pop: RedisScript
     let delete: RedisScript
     let cancel: RedisScript
+    let pauseResume: RedisScript
     let rerunQueue: RedisScript
 }
 
@@ -112,6 +113,18 @@ extension RedisJobQueue {
                 """
                 redis.call("ZREM", KEYS[1], ARGV[1])
                 redis.call("DEL", KEYS[2])
+                return redis.status_reply('OK')
+                """,
+                redisConnectionPool: redisConnectionPool
+            ),
+            pauseResume: .init(
+                """
+                local score = redis.call("ZSCORE", KEYS[1], ARGV[1])
+                if score == nil then
+                    return nil
+                end
+                redis.call("ZREM", KEYS[1], ARGV[1])
+                redis.call("ZADD", score, KEYS[2])
                 return redis.status_reply('OK')
                 """,
                 redisConnectionPool: redisConnectionPool
