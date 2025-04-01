@@ -46,7 +46,7 @@ extension RedisJobQueue {
             addToQueue: .init(
                 """
                 redis.call("SET", KEYS[1], ARGV[1])
-                redis.call("LPUSH", KEYS[2], ARGV[2])
+                redis.call("ZADD", KEYS[2], ARGV[2], ARGV[3])
                 """,
                 redisConnectionPool: redisConnectionPool
             ),

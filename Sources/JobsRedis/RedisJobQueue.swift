@@ -25,7 +25,7 @@ import struct Foundation.UUID
 
 /// Redis implementation of job queue driver
 public final class RedisJobQueue: JobQueueDriver {
-    public struct JobID: Sendable, CustomStringConvertible, Equatable {
+    public struct JobID: Sendable, CustomStringConvertible, Equatable, RESPValueConvertible {
         let value: String
 
         init() {
@@ -34,6 +34,15 @@ public final class RedisJobQueue: JobQueueDriver {
 
         init(value: String) {
             self.value = value
+        }
+
+        public init?(fromRESP value: RediStack.RESPValue) {
+            guard let string = String(fromRESP: value) else { return nil }
+            self.value = string
+        }
+
+        public func convertedToRESPValue() -> RediStack.RESPValue {
+            self.value.convertedToRESPValue()
         }
 
         var redisKey: RedisKey { .init(self.description) }
@@ -203,14 +212,14 @@ public final class RedisJobQueue: JobQueueDriver {
     private func push<Parameters>(jobID: JobID, jobRequest: JobRequest<Parameters>, options: JobOptions) async throws {
         let buffer = try self.jobRegistry.encode(jobRequest: jobRequest)
         let pendingJobID = PendingJobID(jobID: jobID, delayUntil: options.delayUntil)
-        try await self.addToQueue(pendingJobID, buffer: buffer)
-    }
-
-    private func addToQueue(_ pendingJobID: PendingJobID, buffer: ByteBuffer) async throws {
         _ = try await self.scripts.addToQueue.runScript(
             on: self.redisConnectionPool.wrappedValue,
             keys: [pendingJobID.jobID.redisKey, self.configuration.queueKey],
-            arguments: [.init(from: buffer), .init(from: pendingJobID)]
+            arguments: [
+                .init(from: buffer),
+                .init(from: jobID.redisKey),
+                .init(from: options.delayUntil?.timeIntervalSinceReferenceDate ?? Date.now.timeIntervalSinceReferenceDate),
+            ]
         )
     }
 
@@ -223,7 +232,7 @@ public final class RedisJobQueue: JobQueueDriver {
         _ = try await self.scripts.delete.runScript(
             on: self.redisConnectionPool.wrappedValue,
             keys: [self.configuration.processingQueueKey, jobID.redisKey],
-            arguments: [.init(from: jobID.description)]
+            arguments: [.init(from: jobID.redisKey)]
         )
     }
 
@@ -267,22 +276,38 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameter eventLoop: eventLoop to do work on
     /// - Returns: queued job
     func popFirst() async throws -> JobQueueResult<JobID>? {
-        let pool = self.redisConnectionPool.wrappedValue
+        /*let pool = self.redisConnectionPool.wrappedValue
         let pendingJobKey = try await pool.rpop(from: self.configuration.queueKey).get()
         guard !pendingJobKey.isNull else {
             return nil
         }
-
+        
         guard let pendingJobID = PendingJobID(fromRESP: pendingJobKey) else {
             throw RedisQueueError.unexpectedRedisKeyType
         }
-
+        
         guard !pendingJobID.isDelayed() else {
             _ = try await pool.lpush(pendingJobID, into: self.configuration.queueKey).get()
             return nil
         }
         let jobID = pendingJobID.jobID
+        _ = try await pool.lpush(jobID.redisKey, into: self.configuration.processingQueueKey).get()*/
 
+        let pool = self.redisConnectionPool.wrappedValue
+        guard let values = try await pool._zpopmin(from: self.configuration.queueKey).get() else {
+            return nil
+        }
+        guard let jobID = JobID(fromRESP: values.0) else {
+            throw RedisQueueError.unexpectedRedisKeyType
+        }
+        let score = values.1
+        guard Date.now.timeIntervalSince1970 > score else {
+            _ = try await pool.zadd(
+                (element: jobID, score: score),
+                to: self.configuration.queueKey
+            ).get()
+            return nil
+        }
         _ = try await pool.lpush(jobID.redisKey, into: self.configuration.processingQueueKey).get()
 
         if let buffer = try await self.get(jobID: jobID) {
