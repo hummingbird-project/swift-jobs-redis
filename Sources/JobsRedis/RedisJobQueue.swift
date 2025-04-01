@@ -100,6 +100,7 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameters:
     ///   - redisConnectionPool: Redis connection pool
     ///   - configuration: configuration
+    ///   - logger: Logger used by RedisJobQueue
     public init(_ redisConnectionPool: RedisConnectionPool, configuration: Configuration = .init(), logger: Logger) async throws {
         self.redisConnectionPool = .init(redisConnectionPool)
         self.configuration = configuration
@@ -394,6 +395,7 @@ extension JobQueueDriver where Self == RedisJobQueue {
     /// - Parameters:
     ///   - redisConnectionPool: Redis connection pool
     ///   - configuration: configuration
+    ///   - logger: Logger used by RedisJobQueue
     public static func redis(
         _ redisConnectionPool: RedisConnectionPool,
         configuration: RedisJobQueue.Configuration = .init(),
