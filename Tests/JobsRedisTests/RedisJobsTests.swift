@@ -114,7 +114,7 @@ final class RedisJobsTests: XCTestCase {
             try await jobQueue.push(TestParameters(value: 8))
             try await jobQueue.push(TestParameters(value: 9))
             try await jobQueue.push(TestParameters(value: 10))
-            
+
             let isLeader = await jobQueue.queue.isLeader()
             XCTAssertTrue(isLeader)
 
