@@ -88,6 +88,7 @@ public final class RedisJobQueue: JobQueueDriver {
     let configuration: Configuration
     let isStopped: ManagedAtomic<Bool>
     let scripts: RedisScripts
+    let didElectAsLeader: ManagedAtomic<Bool>
 
     /// what to do with failed/processing jobs from last time queue was handled
     public enum JobCleanup: Sendable {
@@ -107,6 +108,7 @@ public final class RedisJobQueue: JobQueueDriver {
         self.isStopped = .init(false)
         self.jobRegistry = .init()
         self.scripts = try await Self.uploadScripts(redisConnectionPool: redisConnectionPool, logger: logger)
+        self.didElectAsLeader = .init(false)
     }
 
     ///  Cleanup job queues
@@ -319,6 +321,32 @@ public final class RedisJobQueue: JobQueueDriver {
         _ = try await self.redisConnectionPool.wrappedValue.delete(jobID.redisKey).get()
     }
 
+    func tryToAcquireLock() async throws {
+        _ = try await self.redisConnectionPool.wrappedValue.set(
+            self.configuration.lockKeyPrefix,
+            to: self.configuration.lockValue,
+            onCondition: .keyDoesNotExist,
+            expiration: self.configuration.lockKeyDuration
+        ).get()
+
+        let result = try await self.redisConnectionPool.wrappedValue.get(self.configuration.lockKeyPrefix).get()
+
+        var isLeader: Bool = false
+        // Should never happen since the value would have been set ealier
+        if result.isNull {
+            isLeader = false
+        }
+
+        if String(fromRESP: result) == self.configuration.lockValue {
+            isLeader = true
+        }
+        didElectAsLeader.store(isLeader, ordering: .relaxed)
+    }
+
+    public func isLeader() async -> Bool {
+        return didElectAsLeader.load(ordering: .relaxed)
+    }
+
     let jobRegistry: JobRegistry
 }
 
@@ -333,6 +361,9 @@ extension RedisJobQueue {
                 if self.queue.isStopped.load(ordering: .relaxed) {
                     return nil
                 }
+
+                try await queue.tryToAcquireLock()
+
                 if let job = try await queue.popFirst() {
                     return job
                 }

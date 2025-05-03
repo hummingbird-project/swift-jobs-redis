@@ -24,10 +24,16 @@ extension RedisJobQueue {
         let failedQueueKey: RedisKey
         let metadataKeyPrefix: String
         let pollTime: Duration
+        let lockKeyPrefix: RedisKey
+        let lockKeyDuration: RedisSetCommandExpiration
+        let lockValue: String
 
         public init(
             queueKey: String = "_hbJobQueue",
-            pollTime: Duration = .milliseconds(100)
+            pollTime: Duration = .milliseconds(100),
+            lockKeyPrefix: String = "swiftjobs:leader",
+            lockKeyDuration: RedisSetCommandExpiration = .seconds(30),
+            lockValue: String = "42"
         ) {
             self.queueKey = RedisKey("\(queueKey).pending")
             self.pausedQueueKey = RedisKey("\(queueKey).paused")
@@ -35,6 +41,9 @@ extension RedisJobQueue {
             self.failedQueueKey = RedisKey("\(queueKey).failed")
             self.metadataKeyPrefix = "\(queueKey).metadata"
             self.pollTime = pollTime
+            self.lockKeyPrefix = RedisKey(lockKeyPrefix)
+            self.lockKeyDuration = lockKeyDuration
+            self.lockValue = lockValue
         }
     }
 }

@@ -209,6 +209,9 @@ final class RedisJobsTests: XCTestCase {
             }
             try await jobQueue.push(TestParameters())
 
+            let isLeader = await jobQueue.queue.isLeader()
+            XCTAssertTrue(isLeader)
+
             await self.fulfillment(of: [expectation], timeout: 5)
             try await Task.sleep(for: .milliseconds(200))
 
