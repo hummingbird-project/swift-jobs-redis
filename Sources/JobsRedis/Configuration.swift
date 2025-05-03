@@ -12,9 +12,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-import struct Foundation.UUID
 import NIOCore
 @preconcurrency import RediStack
+
+import struct Foundation.UUID
 
 extension RedisJobQueue {
     /// Redis Job queue configuration
