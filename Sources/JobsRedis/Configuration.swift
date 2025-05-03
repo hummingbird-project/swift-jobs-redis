@@ -12,6 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+import struct Foundation.UUID
 import NIOCore
 @preconcurrency import RediStack
 
@@ -33,7 +34,7 @@ extension RedisJobQueue {
             pollTime: Duration = .milliseconds(100),
             lockKeyPrefix: String = "swiftjobs:leader",
             lockKeyDuration: RedisSetCommandExpiration = .seconds(30),
-            lockValue: String = "42"
+            lockValue: UUID = .init()
         ) {
             self.queueKey = RedisKey("\(queueKey).pending")
             self.pausedQueueKey = RedisKey("\(queueKey).paused")
@@ -43,7 +44,7 @@ extension RedisJobQueue {
             self.pollTime = pollTime
             self.lockKeyPrefix = RedisKey(lockKeyPrefix)
             self.lockKeyDuration = lockKeyDuration
-            self.lockValue = lockValue
+            self.lockValue = lockValue.uuidString
         }
     }
 }
