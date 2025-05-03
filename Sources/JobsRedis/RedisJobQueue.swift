@@ -344,7 +344,7 @@ public final class RedisJobQueue: JobQueueDriver {
     }
 
     public func isLeader() async -> Bool {
-        return didElectAsLeader.load(ordering: .relaxed)
+        didElectAsLeader.load(ordering: .relaxed)
     }
 
     let jobRegistry: JobRegistry
