@@ -114,6 +114,9 @@ final class RedisJobsTests: XCTestCase {
             try await jobQueue.push(TestParameters(value: 8))
             try await jobQueue.push(TestParameters(value: 9))
             try await jobQueue.push(TestParameters(value: 10))
+            
+            let isLeader = await jobQueue.queue.isLeader()
+            XCTAssertTrue(isLeader)
 
             await self.fulfillment(of: [expectation], timeout: 5)
         }
@@ -208,10 +211,6 @@ final class RedisJobsTests: XCTestCase {
                 }
             }
             try await jobQueue.push(TestParameters())
-
-            let isLeader = await jobQueue.queue.isLeader()
-            XCTAssertTrue(isLeader)
-
             await self.fulfillment(of: [expectation], timeout: 5)
             try await Task.sleep(for: .milliseconds(200))
 
@@ -438,6 +437,8 @@ final class RedisJobsTests: XCTestCase {
             group.addTask {
                 try await serviceGroup.run()
             }
+            let isLeader = await jobQueue2.queue.isLeader()
+            XCTAssertFalse(isLeader)
             do {
                 for i in 0..<200 {
                     try await jobQueue.push(TestParameters(value: i))

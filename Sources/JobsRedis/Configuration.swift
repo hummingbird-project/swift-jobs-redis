@@ -34,7 +34,7 @@ extension RedisJobQueue {
             queueKey: String = "_hbJobQueue",
             pollTime: Duration = .milliseconds(100),
             lockKeyPrefix: String = "swiftjobs:leader",
-            lockKeyDuration: RedisSetCommandExpiration = .seconds(30),
+            lockKeyDuration: RedisSetCommandExpiration = .milliseconds(200),
             lockValue: UUID = .init()
         ) {
             self.queueKey = RedisKey("\(queueKey).pending")
