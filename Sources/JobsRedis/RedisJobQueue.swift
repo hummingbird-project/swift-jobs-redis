@@ -321,7 +321,7 @@ public final class RedisJobQueue: JobQueueDriver {
         _ = try await self.redisConnectionPool.wrappedValue.delete(jobID.redisKey).get()
     }
 
-    func tryToAcquireLock() async throws {
+    public func electLeaderShip() async throws {
         _ = try await self.redisConnectionPool.wrappedValue.set(
             self.configuration.lockKeyPrefix,
             to: self.configuration.lockValue,
@@ -361,9 +361,6 @@ extension RedisJobQueue {
                 if self.queue.isStopped.load(ordering: .relaxed) {
                     return nil
                 }
-
-                try await queue.tryToAcquireLock()
-
                 if let job = try await queue.popFirst() {
                     return job
                 }
