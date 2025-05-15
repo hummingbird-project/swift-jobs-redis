@@ -10,7 +10,7 @@ let package = Package(
         .library(name: "JobsRedis", targets: ["JobsRedis"])
     ],
     dependencies: [
-        .package(url: "https://github.com/hummingbird-project/swift-jobs.git", from: "1.0.0-beta.8"),
+        .package(url: "https://github.com/hummingbird-project/swift-jobs.git", branch: "ressurect-job-id"),
         .package(url: "https://github.com/swift-server/RediStack.git", from: "1.6.2"),
     ],
     targets: [
