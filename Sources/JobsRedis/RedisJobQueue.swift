@@ -212,14 +212,19 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameters:
     ///   - jobID: Job id
     public func failed(jobID: JobID, error: Error) async throws {
-        do {
+        if self.configuration.retentionPolicy.failed == .retain {
             _ = try await self.scripts.moveToFailed.runScript(
                 on: self.redisConnectionPool.wrappedValue,
                 keys: [self.configuration.processingQueueKey, self.configuration.failedQueueKey],
                 arguments: [.init(from: jobID.redisKey), .init(from: Date.now.timeIntervalSince1970)]
             )
-        } catch {
-            print(error)
+        } else {
+            _ = try await self.scripts.failedAndDelete.runScript(
+                on: self.redisConnectionPool.wrappedValue,
+                keys: [self.configuration.processingQueueKey, jobID.redisKey],
+                arguments: [.init(from: jobID.redisKey)]
+            )
+
         }
     }
 
