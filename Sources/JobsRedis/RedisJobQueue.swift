@@ -130,12 +130,16 @@ public final class RedisJobQueue: JobQueueDriver {
     public func cleanup(
         failedJobs: JobCleanup = .doNothing,
         processingJobs: JobCleanup = .doNothing,
-        pendingJobs: JobCleanup = .doNothing
+        pendingJobs: JobCleanup = .doNothing,
+        cancelledJobs: JobCleanup = .doNothing,
+        completedJobs: JobCleanup = .doNothing
     ) async throws {
-        try await self.initPendingQueue(queueKey: self.configuration.queueKey, onInit: pendingJobs)
+        try await self.initPendingQueue(queueKey: self.configuration.queueKey, cleanup: pendingJobs)
         // there shouldn't be any on the processing list, but if there are we should do something with them
-        try await self.initQueue(queueKey: self.configuration.processingQueueKey, onInit: processingJobs)
-        try await self.initQueue(queueKey: self.configuration.failedQueueKey, onInit: failedJobs)
+        try await self.cleanupSet(key: self.configuration.processingQueueKey, cleanup: processingJobs)
+        try await self.cleanupSortedSet(key: self.configuration.failedQueueKey, cleanup: failedJobs)
+        try await self.cleanupSortedSet(key: self.configuration.cancelledQueueKey, cleanup: cancelledJobs)
+        try await self.cleanupSortedSet(key: self.configuration.completedQueueKey, cleanup: completedJobs)
     }
 
     ///  Register job
@@ -187,11 +191,19 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameters:
     ///   - jobID: Job id
     public func finished(jobID: JobID) async throws {
-        _ = try await self.scripts.delete.runScript(
-            on: self.redisConnectionPool.wrappedValue,
-            keys: [self.configuration.processingQueueKey, jobID.redisKey],
-            arguments: [.init(from: jobID.redisKey)]
-        )
+        if self.configuration.retentionPolicy.completed == .retain {
+            _ = try await self.scripts.completedAndRetain.runScript(
+                on: self.redisConnectionPool.wrappedValue,
+                keys: [self.configuration.processingQueueKey, self.configuration.completedQueueKey],
+                arguments: [.init(from: jobID.redisKey), .init(from: Date.now.timeIntervalSince1970)]
+            )
+        } else {
+            _ = try await self.scripts.completed.runScript(
+                on: self.redisConnectionPool.wrappedValue,
+                keys: [self.configuration.processingQueueKey, jobID.redisKey],
+                arguments: [.init(from: jobID.redisKey)]
+            )
+        }
     }
 
     /// Flag job failed to process
@@ -200,11 +212,15 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameters:
     ///   - jobID: Job id
     public func failed(jobID: JobID, error: Error) async throws {
-        _ = try await self.scripts.moveToFailed.runScript(
-            on: self.redisConnectionPool.wrappedValue,
-            keys: [self.configuration.processingQueueKey, self.configuration.failedQueueKey],
-            arguments: [.init(from: jobID.redisKey)]
-        )
+        do {
+            _ = try await self.scripts.moveToFailed.runScript(
+                on: self.redisConnectionPool.wrappedValue,
+                keys: [self.configuration.processingQueueKey, self.configuration.failedQueueKey],
+                arguments: [.init(from: jobID.redisKey), .init(from: Date.now.timeIntervalSince1970)]
+            )
+        } catch {
+            print(error)
+        }
     }
 
     public func stop() async {
@@ -255,51 +271,54 @@ public final class RedisJobQueue: JobQueueDriver {
         }
     }
 
-    /// What to do with queue at initialization
-    func initQueue(queueKey: RedisKey, onInit: JobCleanup) async throws {
-        switch onInit {
+    /// What to do with set at initialization
+    func cleanupSet(key: RedisKey, cleanup: JobCleanup) async throws {
+        switch cleanup {
         case .remove:
-            try await self.removeQueue(queueKey: queueKey)
+            try await self.removeSet(key: key)
         case .rerun:
-            try await self.rerunQueue(queueKey: queueKey)
+            try await self.rerunSet(key: key)
         case .doNothing:
             break
         }
     }
 
-    /// What to do with queue at initialization
-    func initPendingQueue(queueKey: RedisKey, onInit: JobCleanup) async throws {
-        switch onInit {
+    /// What to do with set at initialization
+    func cleanupSortedSet(key: RedisKey, cleanup: JobCleanup) async throws {
+        switch cleanup {
         case .remove:
-            while true {
-                let values = try await self.redisConnectionPool.wrappedValue._zpopmin(count: 1, from: self.configuration.queueKey).get()
-                guard let value = values.first else {
-                    break
-                }
-                guard let jobID = JobID(fromRESP: value.0) else {
-                    throw RedisQueueError.unexpectedRedisKeyType
-                }
-                try await self.delete(jobID: jobID)
-            }
+            try await self.removeSortedSet(key: key)
+        case .rerun:
+            try await self.rerunSortedSet(key: key)
+        case .doNothing:
+            break
+        }
+    }
+
+    /// What to do with the pending queue at initialization
+    func initPendingQueue(queueKey: RedisKey, cleanup: JobCleanup) async throws {
+        switch cleanup {
+        case .remove:
+            try await self.removeSortedSet(key: queueKey)
         default:
             break
         }
     }
 
     /// Push all the entries from list back onto the main list.
-    func rerunQueue(queueKey: RedisKey) async throws {
+    func rerunSet(key: RedisKey) async throws {
         _ = try await self.scripts.rerunQueue.runScript(
             on: self.redisConnectionPool.wrappedValue,
-            keys: [queueKey, self.configuration.queueKey],
+            keys: [key, self.configuration.queueKey],
             arguments: []
         )
     }
 
     /// Delete all entries from queue
-    func removeQueue(queueKey: RedisKey) async throws {
+    func removeSet(key: RedisKey) async throws {
         // Cannot use a script for this as it edits keys that are not input keys
         while true {
-            let key = try await self.redisConnectionPool.wrappedValue.rpop(from: queueKey).get()
+            let key = try await self.redisConnectionPool.wrappedValue.rpop(from: key).get()
             if key.isNull {
                 break
             }
@@ -308,6 +327,29 @@ public final class RedisJobQueue: JobQueueDriver {
             }
             let identifier = JobID(value: key)
             try await self.delete(jobID: identifier)
+        }
+    }
+
+    /// Push all the entries from sorted set back onto the pending sorted set.
+    func rerunSortedSet(key: RedisKey) async throws {
+        _ = try await self.redisConnectionPool.wrappedValue.zunionstore(as: self.configuration.queueKey, sources: [self.configuration.queueKey, key])
+            .get()
+    }
+
+    /// Delete all entries from queue
+    func removeSortedSet(key: RedisKey) async throws {
+        while true {
+            let values = try await self.redisConnectionPool.wrappedValue._zpopmin(count: 100, from: key).get()
+            guard values.first != nil else {
+                break
+            }
+            for value in values {
+                guard let jobID = JobID(fromRESP: value.0) else {
+                    throw RedisQueueError.unexpectedRedisKeyType
+                }
+                try await self.delete(jobID: jobID)
+
+            }
         }
     }
 
@@ -354,11 +396,19 @@ extension RedisJobQueue: CancellableJobQueue {
     /// - Parameters:
     ///  - jobID: Job id
     public func cancel(jobID: JobID) async throws {
-        _ = try await self.scripts.cancel.runScript(
-            on: self.redisConnectionPool.wrappedValue,
-            keys: [self.configuration.queueKey, jobID.redisKey],
-            arguments: [.init(from: jobID.redisKey)]
-        )
+        if self.configuration.retentionPolicy.cancelled == .retain {
+            _ = try await self.scripts.cancelAndRetain.runScript(
+                on: self.redisConnectionPool.wrappedValue,
+                keys: [self.configuration.queueKey, self.configuration.cancelledQueueKey],
+                arguments: [.init(from: jobID.redisKey), .init(from: Date.now.timeIntervalSince1970)]
+            )
+        } else {
+            _ = try await self.scripts.cancel.runScript(
+                on: self.redisConnectionPool.wrappedValue,
+                keys: [self.configuration.queueKey, jobID.redisKey],
+                arguments: [.init(from: jobID.redisKey)]
+            )
+        }
     }
 }
 

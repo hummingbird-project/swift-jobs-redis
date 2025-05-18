@@ -172,12 +172,16 @@ final class RedisJobsTests: XCTestCase {
                 expectation.fulfill()
                 throw FailedError()
             }
+            try await jobQueue.queue.cleanup(failedJobs: .remove)
             try await jobQueue.push(TestParameters())
 
             await self.fulfillment(of: [expectation], timeout: 5)
             try await Task.sleep(for: .milliseconds(200))
 
-            let failedJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.failedQueueKey).get()
+            let failedJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
+                of: jobQueue.queue.configuration.failedQueueKey,
+                withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
+            ).get()
             XCTAssertEqual(failedJobs, 1)
 
             let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.queueKey).get()

@@ -41,11 +41,14 @@ struct RedisScripts {
 
     let addToQueue: RedisScript
     let moveToProcessing: RedisScript
+    let failedAndDelete: RedisScript
     let moveToFailed: RedisScript
     let moveToPending: RedisScript
     let pop: RedisScript
-    let delete: RedisScript
+    let completed: RedisScript
+    let completedAndRetain: RedisScript
     let cancel: RedisScript
+    let cancelAndRetain: RedisScript
     let pauseResume: RedisScript
     let rerunQueue: RedisScript
 }
@@ -70,10 +73,18 @@ extension RedisJobQueue {
                 """,
                 redisConnectionPool: redisConnectionPool
             ),
+            failedAndDelete: .init(
+                """
+                redis.call("LREM", KEYS[1], 0, ARGV[1])
+                redis.call("DEL", KEYS[2])
+                return redis.status_reply('OK')
+                """,
+                redisConnectionPool: redisConnectionPool
+            ),
             moveToFailed: .init(
                 """
                 redis.call("LREM", KEYS[1], 0, ARGV[1])
-                redis.call("LPUSH", KEYS[2], ARGV[1])
+                redis.call("ZADD", KEYS[2], ARGV[2], ARGV[1])
                 return redis.status_reply('OK')
                 """,
                 redisConnectionPool: redisConnectionPool
@@ -101,7 +112,7 @@ extension RedisJobQueue {
                 """,
                 redisConnectionPool: redisConnectionPool
             ),
-            delete: .init(
+            completed: .init(
                 """
                 redis.call("LREM", KEYS[1], 0, ARGV[1])
                 redis.call("DEL", KEYS[2])
@@ -109,10 +120,28 @@ extension RedisJobQueue {
                 """,
                 redisConnectionPool: redisConnectionPool
             ),
+            completedAndRetain: .init(
+                """
+                redis.call("LREM", KEYS[1], 0, ARGV[1])
+                redis.call("ZADD", KEYS[2], ARGV[1], ARGV[2])
+                return redis.status_reply('OK')
+                """,
+                redisConnectionPool: redisConnectionPool
+            ),
             cancel: .init(
                 """
-                redis.call("ZREM", KEYS[1], ARGV[1])
-                redis.call("DEL", KEYS[2])
+                if redis.call("ZREM", KEYS[1], ARGV[1]) > 0 then
+                    redis.call("DEL", KEYS[2])
+                end
+                return redis.status_reply('OK')
+                """,
+                redisConnectionPool: redisConnectionPool
+            ),
+            cancelAndRetain: .init(
+                """
+                if redis.call("ZREM", KEYS[1], ARGV[1]) > 0 then
+                    redis.call("ZADD", KEYS[2], ARGV[1], ARGV[2])
+                end
                 return redis.status_reply('OK')
                 """,
                 redisConnectionPool: redisConnectionPool
@@ -148,7 +177,7 @@ extension RedisJobQueue {
         logger.debug("Move to failed script with SHA1 \(scripts.moveToFailed.sha1)")
         logger.debug("Move to pending script with SHA1 \(scripts.moveToPending.sha1)")
         logger.debug("Pop script with SHA1 \(scripts.pop.sha1)")
-        logger.debug("Delete script with SHA1 \(scripts.delete.sha1)")
+        logger.debug("Delete script with SHA1 \(scripts.completed.sha1)")
         logger.debug("Rerun queue script with SHA1 \(scripts.rerunQueue.sha1)")
         return scripts
     }
