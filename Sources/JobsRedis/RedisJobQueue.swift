@@ -90,7 +90,7 @@ public final class RedisJobQueue: JobQueueDriver {
     let scripts: RedisScripts
 
     /// what to do with failed/processing jobs from last time queue was handled
-    public enum JobCleanup: Sendable {
+    public enum JobCleanup: Sendable, Codable {
         case doNothing
         case rerun
         case remove
@@ -107,39 +107,7 @@ public final class RedisJobQueue: JobQueueDriver {
         self.isStopped = .init(false)
         self.jobRegistry = .init()
         self.scripts = try await Self.uploadScripts(redisConnectionPool: redisConnectionPool, logger: logger)
-    }
-
-    ///  Cleanup job queues
-    ///
-    /// This function is used to re-run or delete jobs in a certain state. Failed jobs can be
-    /// pushed back into the pending queue to be re-run or removed. When called at startup in
-    /// theory no job should be set to processing, or set to pending but not in the queue. but if
-    /// your job server crashes these states are possible, so we also provide options to re-queue
-    /// these jobs so they are run again.
-    ///
-    /// The job queue needs to be running when you call cleanup. You can call `cleanup` with
-    /// `failedJobs`` set to whatever you like at any point to re-queue failed jobs. Moving processing
-    /// or pending jobs should only be done if you are certain there is nothing else processing
-    /// the job queue.
-    ///
-    /// - Parameters:
-    ///   - failedJobs: What to do with jobs tagged as failed
-    ///   - processingJobs: What to do with jobs tagged as processing
-    ///   - pendingJobs: What to do with jobs tagged as pending
-    /// - Throws:
-    public func cleanup(
-        failedJobs: JobCleanup = .doNothing,
-        processingJobs: JobCleanup = .doNothing,
-        pendingJobs: JobCleanup = .doNothing,
-        cancelledJobs: JobCleanup = .doNothing,
-        completedJobs: JobCleanup = .doNothing
-    ) async throws {
-        try await self.initPendingQueue(queueKey: self.configuration.queueKey, cleanup: pendingJobs)
-        // there shouldn't be any on the processing list, but if there are we should do something with them
-        try await self.cleanupSet(key: self.configuration.processingQueueKey, cleanup: processingJobs)
-        try await self.cleanupSortedSet(key: self.configuration.failedQueueKey, cleanup: failedJobs)
-        try await self.cleanupSortedSet(key: self.configuration.cancelledQueueKey, cleanup: cancelledJobs)
-        try await self.cleanupSortedSet(key: self.configuration.completedQueueKey, cleanup: completedJobs)
+        self.registerCleanupJob()
     }
 
     ///  Register job
@@ -273,88 +241,6 @@ public final class RedisJobQueue: JobQueueDriver {
             }
         } else {
             return .init(id: jobID, result: .failure(JobQueueError(code: .unrecognisedJobId, jobName: nil)))
-        }
-    }
-
-    /// What to do with set at initialization
-    func cleanupSet(key: RedisKey, cleanup: JobCleanup) async throws {
-        switch cleanup {
-        case .remove:
-            try await self.removeSet(key: key)
-        case .rerun:
-            try await self.rerunSet(key: key)
-        case .doNothing:
-            break
-        }
-    }
-
-    /// What to do with set at initialization
-    func cleanupSortedSet(key: RedisKey, cleanup: JobCleanup) async throws {
-        switch cleanup {
-        case .remove:
-            try await self.removeSortedSet(key: key)
-        case .rerun:
-            try await self.rerunSortedSet(key: key)
-        case .doNothing:
-            break
-        }
-    }
-
-    /// What to do with the pending queue at initialization
-    func initPendingQueue(queueKey: RedisKey, cleanup: JobCleanup) async throws {
-        switch cleanup {
-        case .remove:
-            try await self.removeSortedSet(key: queueKey)
-        default:
-            break
-        }
-    }
-
-    /// Push all the entries from list back onto the main list.
-    func rerunSet(key: RedisKey) async throws {
-        _ = try await self.scripts.rerunQueue.runScript(
-            on: self.redisConnectionPool.wrappedValue,
-            keys: [key, self.configuration.queueKey],
-            arguments: []
-        )
-    }
-
-    /// Delete all entries from queue
-    func removeSet(key: RedisKey) async throws {
-        // Cannot use a script for this as it edits keys that are not input keys
-        while true {
-            let key = try await self.redisConnectionPool.wrappedValue.rpop(from: key).get()
-            if key.isNull {
-                break
-            }
-            guard let key = String(fromRESP: key) else {
-                throw RedisQueueError.unexpectedRedisKeyType
-            }
-            let identifier = JobID(value: key)
-            try await self.delete(jobID: identifier)
-        }
-    }
-
-    /// Push all the entries from sorted set back onto the pending sorted set.
-    func rerunSortedSet(key: RedisKey) async throws {
-        _ = try await self.redisConnectionPool.wrappedValue.zunionstore(as: self.configuration.queueKey, sources: [self.configuration.queueKey, key])
-            .get()
-    }
-
-    /// Delete all entries from queue
-    func removeSortedSet(key: RedisKey) async throws {
-        while true {
-            let values = try await self.redisConnectionPool.wrappedValue._zpopmin(count: 100, from: key).get()
-            guard values.first != nil else {
-                break
-            }
-            for value in values {
-                guard let jobID = JobID(fromRESP: value.0) else {
-                    throw RedisQueueError.unexpectedRedisKeyType
-                }
-                try await self.delete(jobID: jobID)
-
-            }
         }
     }
 

@@ -66,7 +66,7 @@ final class RedisJobsTests: XCTestCase {
         let redis = try createRedisConnectionPool(logger: logger)
         let redisService = RedisConnectionPoolService(redis)
         let jobQueue = try await JobQueue(
-            .redis(redis, configuration: .init(queueKey: "MyJobQueue", pollTime: .milliseconds(50)), logger: logger),
+            .redis(redis, configuration: .init(queueName: "MyJobQueue", pollTime: .milliseconds(50)), logger: logger),
             numWorkers: numWorkers,
             logger: logger,
             options: .init(
@@ -483,7 +483,7 @@ final class RedisJobsTests: XCTestCase {
         let redis = try createRedisConnectionPool(logger: logger)
         let redisService = RedisConnectionPoolService(redis)
         let jobQueue = try await JobQueue(
-            .redis(redis, configuration: .init(queueKey: "MyJobQueue", pollTime: .milliseconds(50)), logger: logger),
+            .redis(redis, configuration: .init(queueName: "MyJobQueue", pollTime: .milliseconds(50)), logger: logger),
             logger: logger
         )
         jobQueue.registerJob(
@@ -531,7 +531,7 @@ final class RedisJobsTests: XCTestCase {
         let redis = try createRedisConnectionPool(logger: logger)
         let redisService = RedisConnectionPoolService(redis)
         let jobQueue = try await JobQueue(
-            .redis(redis, configuration: .init(queueKey: "MyJobQueue", pollTime: .milliseconds(50)), logger: logger),
+            .redis(redis, configuration: .init(queueName: "MyJobQueue", pollTime: .milliseconds(50)), logger: logger),
             logger: logger
         )
         jobQueue.registerJob(

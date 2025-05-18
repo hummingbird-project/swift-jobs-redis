@@ -18,6 +18,8 @@ import NIOCore
 extension RedisJobQueue {
     /// Redis Job queue configuration
     public struct Configuration: Sendable {
+        /// queue name
+        let queueName: String
         /// Pending queue redis key
         let queueKey: RedisKey
         /// Processing queue redis key
@@ -38,17 +40,18 @@ extension RedisJobQueue {
         let retentionPolicy: RetentionPolicy
 
         public init(
-            queueKey: String = "_hbJobQueue",
+            queueName: String = "_hbJobQueue",
             pollTime: Duration = .milliseconds(100),
             retentionPolicy: RetentionPolicy = .init()
         ) {
-            self.queueKey = RedisKey("\(queueKey).pending")
-            self.pausedQueueKey = RedisKey("\(queueKey).paused")
-            self.processingQueueKey = RedisKey("\(queueKey).processing")
-            self.failedQueueKey = RedisKey("\(queueKey).failed")
-            self.cancelledQueueKey = RedisKey("\(queueKey).cancelled")
-            self.completedQueueKey = RedisKey("\(queueKey).completed")
-            self.metadataKeyPrefix = "\(queueKey).metadata"
+            self.queueName = queueName
+            self.queueKey = RedisKey("\(queueName).pending")
+            self.pausedQueueKey = RedisKey("\(queueName).paused")
+            self.processingQueueKey = RedisKey("\(queueName).processing")
+            self.failedQueueKey = RedisKey("\(queueName).failed")
+            self.cancelledQueueKey = RedisKey("\(queueName).cancelled")
+            self.completedQueueKey = RedisKey("\(queueName).completed")
+            self.metadataKeyPrefix = "\(queueName).metadata"
             self.pollTime = pollTime
             self.retentionPolicy = retentionPolicy
         }
