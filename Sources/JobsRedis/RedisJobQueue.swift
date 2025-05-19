@@ -245,6 +245,10 @@ public final class RedisJobQueue: JobQueueDriver {
         _ = try await self.redisConnectionPool.wrappedValue.delete(jobID.redisKey(for: self)).get()
     }
 
+    func delete(jobIDs: [JobID]) async throws {
+        _ = try await self.redisConnectionPool.wrappedValue.delete(jobIDs.map { $0.redisKey(for: self) }).get()
+    }
+
     let jobRegistry: JobRegistry
 }
 
@@ -360,8 +364,7 @@ extension ByteBuffer {
 extension RedisClient {
     /// The version of zpopmin in RediStack does not work, so until a fix is merged I have
     /// implemented a version of it here
-    @inlinable
-    public func _zpopmin(
+    func _zpopmin(
         count: Int,
         from key: RedisKey
     ) -> EventLoopFuture<[(RESPValue, Double)]> {
@@ -383,5 +386,17 @@ extension RedisClient {
             }
             return result
         }
+    }
+
+    /// Removes and returns the last elements of the list stored at key.
+    ///
+    /// See [https://redis.io/commands/rpop](https://redis.io/commands/rpop)
+    /// - Parameters
+    ///    - key: The key of the list to pop from.
+    ///    - count: Number of elements to pop
+    /// - Returns: The elements that were popped from the list, else `.null`.
+    func rpop(from key: RedisKey, count: Int) -> EventLoopFuture<RESPValue> {
+        let args = [RESPValue(from: key), RESPValue(from: count)]
+        return send(command: "RPOP", with: args)
     }
 }

@@ -179,15 +179,14 @@ extension RedisJobQueue {
     func removeSet(key: RedisKey) async throws {
         // Cannot use a script for this as it edits keys that are not input keys
         while true {
-            let key = try await self.redisConnectionPool.wrappedValue.rpop(from: key).get()
-            if key.isNull {
+            let response = try await self.redisConnectionPool.wrappedValue.rpop(from: key, count: 100).get()
+            if response.isNull {
                 break
             }
-            guard let key = String(fromRESP: key) else {
+            guard let jobIDs = [JobID](fromRESP: response) else {
                 throw RedisQueueError.unexpectedRedisKeyType
             }
-            let identifier = JobID(value: key)
-            try await self.delete(jobID: identifier)
+            try await self.delete(jobIDs: jobIDs)
         }
     }
 
@@ -224,14 +223,25 @@ extension RedisJobQueue {
                 guard values[index].1 <= date.timeIntervalSince1970 else {
                     break
                 }
-                guard let jobID = JobID(fromRESP: values[index].0) else {
-                    throw RedisQueueError.unexpectedRedisKeyType
-                }
-                try await self.delete(jobID: jobID)
                 index += 1
             }
             if index < values.count {
+                // if we broke out of the loop before reaching the end we found a value which shouldnt be
+                // deleted. Delete everything up until that point and add the remaining values back into the
+                // sorted set
+                let jobIDs = values[..<index].compactMap { JobID(fromRESP: $0.0) }
+                guard jobIDs.count == values.count else {
+                    throw RedisQueueError.unexpectedRedisKeyType
+                }
+                try await self.delete(jobIDs: jobIDs)
                 _ = try await self.redisConnectionPool.wrappedValue.zadd(values[index...].map { (element: $0.0, score: $0.1) }, to: key).get()
+            } else {
+                // delete all jobIDs returned by zpopmin
+                let jobIDs = values.compactMap { JobID(fromRESP: $0.0) }
+                guard jobIDs.count == values.count else {
+                    throw RedisQueueError.unexpectedRedisKeyType
+                }
+                try await self.delete(jobIDs: jobIDs)
             }
         }
     }

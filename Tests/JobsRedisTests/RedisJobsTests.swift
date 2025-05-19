@@ -733,6 +733,32 @@ final class RedisJobsTests: XCTestCase {
             }
         }
     }
+
+    func testCleanupProcessingJobs() async throws {
+        let jobQueue = try await self.createJobQueue(
+            numWorkers: 1,
+            configuration: .init(retentionPolicy: .init(cancelled: .retain))
+        )
+        let jobName = JobName<Int>("testCancelledJobRetention")
+        jobQueue.registerJob(name: jobName) { _, _ in }
+
+        let jobID = try await jobQueue.push(jobName, parameters: 1)
+        let job = try await jobQueue.queue.popFirst()
+        XCTAssertEqual(jobID, job?.id)
+        _ = try await jobQueue.push(jobName, parameters: 1)
+        _ = try await jobQueue.queue.popFirst()
+
+        var processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey).get()
+        XCTAssertEqual(processingJobs, 2)
+
+        try await jobQueue.queue.cleanup(processingJobs: .remove)
+
+        processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey).get()
+        XCTAssertEqual(processingJobs, 0)
+
+        let exists = try await jobQueue.queue.redisConnectionPool.wrappedValue.exists(jobID.redisKey(for: jobQueue.queue)).get()
+        XCTAssertEqual(exists, 0)
+    }
 }
 
 struct RedisConnectionPoolService: Service {
