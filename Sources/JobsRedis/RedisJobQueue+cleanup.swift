@@ -33,6 +33,48 @@ public struct RedisJobCleanupParameters: Sendable & Codable {
 }
 
 extension RedisJobQueue {
+    /// how to cleanup a job
+    public struct JobCleanup: Sendable, Codable {
+        enum RawValue: Codable {
+            case doNothing
+            case rerun
+            case remove(maxAge: Duration?)
+        }
+        let rawValue: RawValue
+
+        public static var doNothing: Self { .init(rawValue: .doNothing) }
+        public static var rerun: Self { .init(rawValue: .rerun) }
+        public static var remove: Self { .init(rawValue: .remove(maxAge: nil)) }
+        public static func remove(maxAge: Duration) -> Self { .init(rawValue: .remove(maxAge: maxAge)) }
+    }
+
+    /// how to cleanup a currently processing job
+    public struct ProcessingJobCleanup: Sendable, Codable, Equatable {
+        enum RawValue: Codable, Equatable {
+            case doNothing
+            case rerun
+            case remove
+        }
+        let rawValue: RawValue
+
+        public static var doNothing: Self { .init(rawValue: .doNothing) }
+        public static var rerun: Self { .init(rawValue: .rerun) }
+        public static var remove: Self { .init(rawValue: .remove) }
+    }
+
+    /// how to cleanup a currently processing job
+    public struct PendingJobCleanup: Sendable, Codable, Equatable {
+        enum RawValue: Codable, Equatable {
+            case doNothing
+            case remove(maxAge: Duration?)
+        }
+        let rawValue: RawValue
+
+        public static var doNothing: Self { .init(rawValue: .doNothing) }
+        public static var remove: Self { .init(rawValue: .remove(maxAge: nil)) }
+        public static func remove(maxAge: Duration) -> Self { .init(rawValue: .remove(maxAge: maxAge)) }
+    }
+
     /// clean up job name.
     ///
     /// Use this with the ``JobSchedule`` to schedule a cleanup of
@@ -76,8 +118,8 @@ extension RedisJobQueue {
     /// - Throws:
     public func cleanup(
         failedJobs: JobCleanup = .doNothing,
-        processingJobs: JobCleanup = .doNothing,
-        pendingJobs: JobCleanup = .doNothing,
+        processingJobs: ProcessingJobCleanup = .doNothing,
+        pendingJobs: PendingJobCleanup = .doNothing,
         cancelledJobs: JobCleanup = .doNothing,
         completedJobs: JobCleanup = .doNothing
     ) async throws {
@@ -90,8 +132,8 @@ extension RedisJobQueue {
     }
 
     /// What to do with set at initialization
-    func cleanupSet(key: RedisKey, cleanup: JobCleanup) async throws {
-        switch cleanup {
+    func cleanupSet(key: RedisKey, cleanup: ProcessingJobCleanup) async throws {
+        switch cleanup.rawValue {
         case .remove:
             try await self.removeSet(key: key)
         case .rerun:
@@ -103,7 +145,7 @@ extension RedisJobQueue {
 
     /// What to do with set at initialization
     func cleanupSortedSet(key: RedisKey, cleanup: JobCleanup) async throws {
-        switch cleanup {
+        switch cleanup.rawValue {
         case .remove:
             try await self.removeSortedSet(key: key)
         case .rerun:
@@ -114,11 +156,11 @@ extension RedisJobQueue {
     }
 
     /// What to do with the pending queue at initialization
-    func cleanupPendingQueue(queueKey: RedisKey, cleanup: JobCleanup) async throws {
-        switch cleanup {
+    func cleanupPendingQueue(queueKey: RedisKey, cleanup: PendingJobCleanup) async throws {
+        switch cleanup.rawValue {
         case .remove:
             try await self.removeSortedSet(key: queueKey)
-        default:
+        case .doNothing:
             break
         }
     }

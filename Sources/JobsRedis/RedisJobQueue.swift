@@ -89,13 +89,6 @@ public final class RedisJobQueue: JobQueueDriver {
     let isStopped: ManagedAtomic<Bool>
     let scripts: RedisScripts
 
-    /// what to do with failed/processing jobs from last time queue was handled
-    public enum JobCleanup: Sendable, Codable {
-        case doNothing
-        case rerun
-        case remove
-    }
-
     /// Initialize redis job queue
     /// - Parameters:
     ///   - redisConnectionPool: Redis connection pool
