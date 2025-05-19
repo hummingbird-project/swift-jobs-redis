@@ -12,6 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+import Foundation
 import Jobs
 @preconcurrency import RediStack
 
@@ -146,8 +147,8 @@ extension RedisJobQueue {
     /// What to do with set at initialization
     func cleanupSortedSet(key: RedisKey, cleanup: JobCleanup) async throws {
         switch cleanup.rawValue {
-        case .remove:
-            try await self.removeSortedSet(key: key)
+        case .remove(let maxAge):
+            try await self.removeSortedSet(key: key, maxAge: maxAge)
         case .rerun:
             try await self.rerunSortedSet(key: key)
         case .doNothing:
@@ -158,8 +159,8 @@ extension RedisJobQueue {
     /// What to do with the pending queue at initialization
     func cleanupPendingQueue(queueKey: RedisKey, cleanup: PendingJobCleanup) async throws {
         switch cleanup.rawValue {
-        case .remove:
-            try await self.removeSortedSet(key: queueKey)
+        case .remove(let maxAge):
+            try await self.removeSortedSet(key: queueKey, maxAge: maxAge)
         case .doNothing:
             break
         }
@@ -196,19 +197,41 @@ extension RedisJobQueue {
             .get()
     }
 
-    /// Delete all entries from queue
-    func removeSortedSet(key: RedisKey) async throws {
+    /// Delete all entries from queue older than specified date
+    func removeSortedSet(key: RedisKey, maxAge: Duration?) async throws {
+        let date: Date =
+            if let maxAge {
+                .now - Double(maxAge.components.seconds)
+            } else {
+                .distantFuture
+            }
+        // Get number of keys we should pop
         while true {
-            let values = try await self.redisConnectionPool.wrappedValue._zpopmin(count: 100, from: key).get()
+            // get count of keys older than date
+            let count = try await self.redisConnectionPool.wrappedValue.zcount(of: key, withMaximumScoreOf: .inclusive(date.timeIntervalSince1970))
+                .get()
+            guard count > 0 else {
+                break
+            }
+            // Pop a maximum of 100 keys at one time
+            let chunk = Swift.min(count, 100)
+            let values = try await self.redisConnectionPool.wrappedValue._zpopmin(count: chunk, from: key).get()
             guard values.first != nil else {
                 break
             }
-            for value in values {
-                guard let jobID = JobID(fromRESP: value.0) else {
+            var index = 0
+            while index < values.count {
+                guard values[index].1 <= date.timeIntervalSince1970 else {
+                    break
+                }
+                guard let jobID = JobID(fromRESP: values[index].0) else {
                     throw RedisQueueError.unexpectedRedisKeyType
                 }
                 try await self.delete(jobID: jobID)
-
+                index += 1
+            }
+            if index < values.count {
+                _ = try await self.redisConnectionPool.wrappedValue.zadd(values[index...].map { (element: $0.0, score: $0.1) }, to: key).get()
             }
         }
     }

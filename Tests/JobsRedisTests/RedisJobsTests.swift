@@ -621,6 +621,15 @@ final class RedisJobsTests: XCTestCase {
             ).get()
             XCTAssertEqual(completedJobsCount, 3)
 
+            // Remove completed task more than 10 seconds old ie none
+            try await jobQueue.queue.cleanup(completedJobs: .remove(maxAge: .seconds(10)))
+
+            completedJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
+                of: jobQueue.queue.configuration.completedQueueKey,
+                withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
+            ).get()
+            XCTAssertEqual(completedJobsCount, 3)
+
             try await jobQueue.queue.cleanup(completedJobs: .remove(maxAge: .seconds(0)))
 
             completedJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
