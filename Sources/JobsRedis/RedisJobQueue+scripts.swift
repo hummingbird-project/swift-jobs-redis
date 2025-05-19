@@ -51,6 +51,7 @@ struct RedisScripts {
     let cancelAndRetain: RedisScript
     let pauseResume: RedisScript
     let rerunQueue: RedisScript
+    let rerunSortedSet: RedisScript
 }
 
 extension RedisJobQueue {
@@ -167,6 +168,14 @@ extension RedisJobQueue {
                     end
                     redis.call("ZADD", KEYS[2], 0, value)
                 end
+                return redis.status_reply('OK')
+                """,
+                redisConnectionPool: redisConnectionPool
+            ),
+            rerunSortedSet: .init(
+                """
+                redis.call("ZUNIONSTORE", KEYS[2], 2, KEYS[1], KEYS[2])
+                redis.call("DEL", KEYS[1])
                 return redis.status_reply('OK')
                 """,
                 redisConnectionPool: redisConnectionPool
