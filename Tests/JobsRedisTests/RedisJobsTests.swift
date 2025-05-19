@@ -648,6 +648,49 @@ final class RedisJobsTests: XCTestCase {
         let jobName = JobName<Int>("testCancelledJobRetention")
         jobQueue.registerJob(name: jobName) { _, _ in }
 
+        try await jobQueue.queue.cleanup(
+            failedJobs: .remove,
+            processingJobs: .remove,
+            pendingJobs: .remove,
+            cancelledJobs: .remove,
+            completedJobs: .remove
+        )
+
+        for _ in 0..<150 {
+            let jobId = try await jobQueue.push(jobName, parameters: 1)
+            try await jobQueue.cancelJob(jobID: jobId)
+        }
+
+        var cancelledJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
+            of: jobQueue.queue.configuration.cancelledQueueKey,
+            withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
+        ).get()
+        XCTAssertEqual(cancelledJobsCount, 150)
+
+        try await jobQueue.queue.cleanup(cancelledJobs: .remove(maxAge: .seconds(0)))
+
+        cancelledJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
+            of: jobQueue.queue.configuration.cancelledQueueKey,
+            withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
+        ).get()
+        XCTAssertEqual(cancelledJobsCount, 0)
+    }
+
+    func testCancelledJobRerun() async throws {
+        let jobQueue = try await self.createJobQueue(
+            numWorkers: 1,
+            configuration: .init(retentionPolicy: .init(cancelled: .retain))
+        )
+        let jobName = JobName<Int>("testCancelledJobRetention")
+        jobQueue.registerJob(name: jobName) { _, _ in }
+
+        try await jobQueue.queue.cleanup(
+            failedJobs: .remove,
+            processingJobs: .remove,
+            pendingJobs: .remove,
+            cancelledJobs: .remove,
+            completedJobs: .remove
+        )
         let jobId = try await jobQueue.push(jobName, parameters: 1)
         let jobId2 = try await jobQueue.push(jobName, parameters: 2)
 
@@ -659,14 +702,57 @@ final class RedisJobsTests: XCTestCase {
             withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
         ).get()
         XCTAssertEqual(cancelledJobsCount, 2)
+        var pendingJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
+            of: jobQueue.queue.configuration.queueKey,
+            withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
+        ).get()
+        XCTAssertEqual(pendingJobsCount, 0)
 
-        try await jobQueue.queue.cleanup(cancelledJobs: .remove(maxAge: .seconds(0)))
+        try await jobQueue.queue.cleanup(cancelledJobs: .rerun)
 
         cancelledJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
             of: jobQueue.queue.configuration.cancelledQueueKey,
             withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
         ).get()
         XCTAssertEqual(cancelledJobsCount, 0)
+        pendingJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
+            of: jobQueue.queue.configuration.queueKey,
+            withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
+        ).get()
+        XCTAssertEqual(pendingJobsCount, 2)
+    }
+
+    func testCleanupProcessingJobs() async throws {
+        let jobQueue = try await self.createJobQueue(
+            numWorkers: 1,
+            configuration: .init(retentionPolicy: .init(cancelled: .retain))
+        )
+        let jobName = JobName<Int>("testCancelledJobRetention")
+        jobQueue.registerJob(name: jobName) { _, _ in }
+
+        try await jobQueue.queue.cleanup(
+            failedJobs: .remove,
+            processingJobs: .remove,
+            pendingJobs: .remove,
+            cancelledJobs: .remove,
+            completedJobs: .remove
+        )
+        let jobID = try await jobQueue.push(jobName, parameters: 1)
+        let job = try await jobQueue.queue.popFirst()
+        XCTAssertEqual(jobID, job?.id)
+        _ = try await jobQueue.push(jobName, parameters: 1)
+        _ = try await jobQueue.queue.popFirst()
+
+        var processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey).get()
+        XCTAssertEqual(processingJobs, 2)
+
+        try await jobQueue.queue.cleanup(processingJobs: .remove)
+
+        processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey).get()
+        XCTAssertEqual(processingJobs, 0)
+
+        let exists = try await jobQueue.queue.redisConnectionPool.wrappedValue.exists(jobID.redisKey(for: jobQueue.queue)).get()
+        XCTAssertEqual(exists, 0)
     }
 
     func testCleanupJob() async throws {
@@ -732,32 +818,6 @@ final class RedisJobsTests: XCTestCase {
                 XCTAssertEqual(failedJobsCount, 1)
             }
         }
-    }
-
-    func testCleanupProcessingJobs() async throws {
-        let jobQueue = try await self.createJobQueue(
-            numWorkers: 1,
-            configuration: .init(retentionPolicy: .init(cancelled: .retain))
-        )
-        let jobName = JobName<Int>("testCancelledJobRetention")
-        jobQueue.registerJob(name: jobName) { _, _ in }
-
-        let jobID = try await jobQueue.push(jobName, parameters: 1)
-        let job = try await jobQueue.queue.popFirst()
-        XCTAssertEqual(jobID, job?.id)
-        _ = try await jobQueue.push(jobName, parameters: 1)
-        _ = try await jobQueue.queue.popFirst()
-
-        var processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey).get()
-        XCTAssertEqual(processingJobs, 2)
-
-        try await jobQueue.queue.cleanup(processingJobs: .remove)
-
-        processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey).get()
-        XCTAssertEqual(processingJobs, 0)
-
-        let exists = try await jobQueue.queue.redisConnectionPool.wrappedValue.exists(jobID.redisKey(for: jobQueue.queue)).get()
-        XCTAssertEqual(exists, 0)
     }
 }
 
