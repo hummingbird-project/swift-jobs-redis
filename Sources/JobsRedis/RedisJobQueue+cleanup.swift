@@ -192,8 +192,11 @@ extension RedisJobQueue {
 
     /// Push all the entries from sorted set back onto the pending sorted set.
     func rerunSortedSet(key: RedisKey) async throws {
-        _ = try await self.redisConnectionPool.wrappedValue.zunionstore(as: self.configuration.queueKey, sources: [self.configuration.queueKey, key])
-            .get()
+        _ = try await self.scripts.rerunSortedSet.runScript(
+            on: self.redisConnectionPool.wrappedValue,
+            keys: [key, self.configuration.queueKey],
+            arguments: []
+        )
     }
 
     /// Delete all entries from queue older than specified date
