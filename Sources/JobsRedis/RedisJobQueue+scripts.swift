@@ -123,7 +123,7 @@ extension RedisJobQueue {
             completedAndRetain: .init(
                 """
                 redis.call("LREM", KEYS[1], 0, ARGV[1])
-                redis.call("ZADD", KEYS[2], ARGV[1], ARGV[2])
+                redis.call("ZADD", KEYS[2], ARGV[2], ARGV[1])
                 return redis.status_reply('OK')
                 """,
                 redisConnectionPool: redisConnectionPool
@@ -140,7 +140,7 @@ extension RedisJobQueue {
             cancelAndRetain: .init(
                 """
                 if redis.call("ZREM", KEYS[1], ARGV[1]) > 0 then
-                    redis.call("ZADD", KEYS[2], ARGV[1], ARGV[2])
+                    redis.call("ZADD", KEYS[2], ARGV[2], ARGV[1])
                 end
                 return redis.status_reply('OK')
                 """,
