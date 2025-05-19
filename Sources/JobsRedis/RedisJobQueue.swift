@@ -45,7 +45,7 @@ public final class RedisJobQueue: JobQueueDriver {
             self.value.convertedToRESPValue()
         }
 
-        var redisKey: RedisKey { .init(self.description) }
+        func redisKey(for queue: RedisJobQueue) -> RedisKey { .init("\(queue.configuration.queueName)/\(self.description)") }
 
         /// String description of Identifier
         public var description: String {
@@ -137,10 +137,10 @@ public final class RedisJobQueue: JobQueueDriver {
         let buffer = try self.jobRegistry.encode(jobRequest: jobRequest)
         _ = try await self.scripts.addToQueue.runScript(
             on: self.redisConnectionPool.wrappedValue,
-            keys: [jobID.redisKey, self.configuration.queueKey],
+            keys: [jobID.redisKey(for: self), self.configuration.queueKey],
             arguments: [
                 .init(from: buffer),
-                .init(from: jobID.redisKey),
+                .init(from: jobID.description),
                 .init(from: options.delayUntil?.timeIntervalSince1970 ?? Date.now.timeIntervalSince1970),
             ]
         )
@@ -156,13 +156,13 @@ public final class RedisJobQueue: JobQueueDriver {
             _ = try await self.scripts.completedAndRetain.runScript(
                 on: self.redisConnectionPool.wrappedValue,
                 keys: [self.configuration.processingQueueKey, self.configuration.completedQueueKey],
-                arguments: [.init(from: jobID.redisKey), .init(from: Date.now.timeIntervalSince1970)]
+                arguments: [.init(from: jobID.description), .init(from: Date.now.timeIntervalSince1970)]
             )
         } else {
             _ = try await self.scripts.completed.runScript(
                 on: self.redisConnectionPool.wrappedValue,
-                keys: [self.configuration.processingQueueKey, jobID.redisKey],
-                arguments: [.init(from: jobID.redisKey)]
+                keys: [self.configuration.processingQueueKey, jobID.redisKey(for: self)],
+                arguments: [.init(from: jobID.description)]
             )
         }
     }
@@ -177,13 +177,13 @@ public final class RedisJobQueue: JobQueueDriver {
             _ = try await self.scripts.moveToFailed.runScript(
                 on: self.redisConnectionPool.wrappedValue,
                 keys: [self.configuration.processingQueueKey, self.configuration.failedQueueKey],
-                arguments: [.init(from: jobID.redisKey), .init(from: Date.now.timeIntervalSince1970)]
+                arguments: [.init(from: jobID.description), .init(from: Date.now.timeIntervalSince1970)]
             )
         } else {
             _ = try await self.scripts.failedAndDelete.runScript(
                 on: self.redisConnectionPool.wrappedValue,
-                keys: [self.configuration.processingQueueKey, jobID.redisKey],
-                arguments: [.init(from: jobID.redisKey)]
+                keys: [self.configuration.processingQueueKey, jobID.redisKey(for: self)],
+                arguments: [.init(from: jobID.description)]
             )
 
         }
@@ -238,11 +238,11 @@ public final class RedisJobQueue: JobQueueDriver {
     }
 
     func get(jobID: JobID) async throws -> ByteBuffer? {
-        try await self.redisConnectionPool.wrappedValue.get(jobID.redisKey).get().byteBuffer
+        try await self.redisConnectionPool.wrappedValue.get(jobID.redisKey(for: self)).get().byteBuffer
     }
 
     func delete(jobID: JobID) async throws {
-        _ = try await self.redisConnectionPool.wrappedValue.delete(jobID.redisKey).get()
+        _ = try await self.redisConnectionPool.wrappedValue.delete(jobID.redisKey(for: self)).get()
     }
 
     let jobRegistry: JobRegistry
@@ -284,13 +284,13 @@ extension RedisJobQueue: CancellableJobQueue {
             _ = try await self.scripts.cancelAndRetain.runScript(
                 on: self.redisConnectionPool.wrappedValue,
                 keys: [self.configuration.queueKey, self.configuration.cancelledQueueKey],
-                arguments: [.init(from: jobID.redisKey), .init(from: Date.now.timeIntervalSince1970)]
+                arguments: [.init(from: jobID.description), .init(from: Date.now.timeIntervalSince1970)]
             )
         } else {
             _ = try await self.scripts.cancel.runScript(
                 on: self.redisConnectionPool.wrappedValue,
-                keys: [self.configuration.queueKey, jobID.redisKey],
-                arguments: [.init(from: jobID.redisKey)]
+                keys: [self.configuration.queueKey, jobID.redisKey(for: self)],
+                arguments: [.init(from: jobID.description)]
             )
         }
     }
@@ -306,7 +306,7 @@ extension RedisJobQueue: ResumableJobQueue {
         _ = try await self.scripts.pauseResume.runScript(
             on: self.redisConnectionPool.wrappedValue,
             keys: [self.configuration.queueKey, self.configuration.pausedQueueKey],
-            arguments: [.init(from: jobID.redisKey)]
+            arguments: [.init(from: jobID.description)]
         )
     }
 
@@ -319,7 +319,7 @@ extension RedisJobQueue: ResumableJobQueue {
         _ = try await self.scripts.pauseResume.runScript(
             on: self.redisConnectionPool.wrappedValue,
             keys: [self.configuration.pausedQueueKey, self.configuration.queueKey],
-            arguments: [.init(from: jobID.redisKey)]
+            arguments: [.init(from: jobID.description)]
         )
     }
 }
