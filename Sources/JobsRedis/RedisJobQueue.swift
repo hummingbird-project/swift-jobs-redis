@@ -241,10 +241,6 @@ public final class RedisJobQueue: JobQueueDriver {
         try await self.redisConnectionPool.wrappedValue.get(jobID.redisKey(for: self)).get().byteBuffer
     }
 
-    func delete(jobID: JobID) async throws {
-        _ = try await self.redisConnectionPool.wrappedValue.delete(jobID.redisKey(for: self)).get()
-    }
-
     func delete(jobIDs: [JobID]) async throws {
         _ = try await self.redisConnectionPool.wrappedValue.delete(jobIDs.map { $0.redisKey(for: self) }).get()
     }
