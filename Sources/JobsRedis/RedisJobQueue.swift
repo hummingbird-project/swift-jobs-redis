@@ -300,6 +300,7 @@ extension RedisJobQueue: CancellableJobQueue {
     /// Removes it from the pending queue
     /// - Parameters:
     ///  - jobID: Job id
+    @inlinable
     public func cancel(jobID: JobID) async throws {
         if self.configuration.retentionPolicy.cancelled == .retain {
             _ = try await self.scripts.cancelAndRetain.runScript(
@@ -323,6 +324,7 @@ extension RedisJobQueue: ResumableJobQueue {
     /// Removes it from the pending queue, adds to paused queue
     /// - Parameters:
     ///  - jobID: Job id
+    @inlinable
     public func pause(jobID: JobID) async throws {
         _ = try await self.scripts.pauseResume.runScript(
             on: self.redisConnectionPool.wrappedValue,
@@ -336,6 +338,7 @@ extension RedisJobQueue: ResumableJobQueue {
     /// Removes it from the paused queue, adds to pending queue
     /// - Parameters:
     ///  - jobID: Job id
+    @inlinable
     public func resume(jobID: JobID) async throws {
         _ = try await self.scripts.pauseResume.runScript(
             on: self.redisConnectionPool.wrappedValue,

@@ -54,8 +54,11 @@ struct RedisScripts: Sendable {
     let completed: RedisScript
     @usableFromInline
     let completedAndRetain: RedisScript
+    @usableFromInline
     let cancel: RedisScript
+    @usableFromInline
     let cancelAndRetain: RedisScript
+    @usableFromInline
     let pauseResume: RedisScript
     let rerunQueue: RedisScript
     let rerunSortedSet: RedisScript
