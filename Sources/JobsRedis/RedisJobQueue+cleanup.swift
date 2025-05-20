@@ -124,7 +124,7 @@ extension RedisJobQueue {
         cancelledJobs: JobCleanup = .doNothing,
         completedJobs: JobCleanup = .doNothing
     ) async throws {
-        try await self.cleanupPendingQueue(queueKey: self.configuration.queueKey, cleanup: pendingJobs)
+        try await self.cleanupPendingQueue(queueKey: self.configuration.pendingQueueKey, cleanup: pendingJobs)
         // there shouldn't be any on the processing list, but if there are we should do something with them
         try await self.cleanupSet(key: self.configuration.processingQueueKey, cleanup: processingJobs)
         try await self.cleanupSortedSet(key: self.configuration.failedQueueKey, cleanup: failedJobs)
@@ -170,7 +170,7 @@ extension RedisJobQueue {
     func rerunSet(key: RedisKey) async throws {
         _ = try await self.scripts.rerunQueue.runScript(
             on: self.redisConnectionPool.wrappedValue,
-            keys: [key, self.configuration.queueKey],
+            keys: [key, self.configuration.pendingQueueKey],
             arguments: []
         )
     }
@@ -194,7 +194,7 @@ extension RedisJobQueue {
     func rerunSortedSet(key: RedisKey) async throws {
         _ = try await self.scripts.rerunSortedSet.runScript(
             on: self.redisConnectionPool.wrappedValue,
-            keys: [key, self.configuration.queueKey],
+            keys: [key, self.configuration.pendingQueueKey],
             arguments: []
         )
     }

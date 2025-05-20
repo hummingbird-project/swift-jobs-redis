@@ -192,7 +192,7 @@ final class RedisJobsTests: XCTestCase {
             ).get()
             XCTAssertEqual(failedJobs, 1)
 
-            let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.queueKey).get()
+            let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.pendingQueueKey).get()
             XCTAssertEqual(pendingJobs, 0)
         }
     }
@@ -227,7 +227,7 @@ final class RedisJobsTests: XCTestCase {
             let failedJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.failedQueueKey).get()
             XCTAssertEqual(failedJobs, 0)
 
-            let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.queueKey).get()
+            let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.pendingQueueKey).get()
             XCTAssertEqual(pendingJobs, 0)
 
             let processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey)
@@ -301,7 +301,7 @@ final class RedisJobsTests: XCTestCase {
             try await jobQueue.push(TestParameters())
             await self.fulfillment(of: [expectation], timeout: 5)
 
-            let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.queueKey).get()
+            let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.pendingQueueKey).get()
             XCTAssertEqual(pendingJobs, 0)
             let failedJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.failedQueueKey).get()
             let processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey)
@@ -703,7 +703,7 @@ final class RedisJobsTests: XCTestCase {
         ).get()
         XCTAssertEqual(cancelledJobsCount, 2)
         var pendingJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
-            of: jobQueue.queue.configuration.queueKey,
+            of: jobQueue.queue.configuration.pendingQueueKey,
             withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
         ).get()
         XCTAssertEqual(pendingJobsCount, 0)
@@ -716,7 +716,7 @@ final class RedisJobsTests: XCTestCase {
         ).get()
         XCTAssertEqual(cancelledJobsCount, 0)
         pendingJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
-            of: jobQueue.queue.configuration.queueKey,
+            of: jobQueue.queue.configuration.pendingQueueKey,
             withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
         ).get()
         XCTAssertEqual(pendingJobsCount, 2)
@@ -784,7 +784,7 @@ final class RedisJobsTests: XCTestCase {
         processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey).get()
         XCTAssertEqual(processingJobs, 0)
         let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
-            of: jobQueue.queue.configuration.queueKey,
+            of: jobQueue.queue.configuration.pendingQueueKey,
             withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
         ).get()
         XCTAssertEqual(pendingJobs, 2)
