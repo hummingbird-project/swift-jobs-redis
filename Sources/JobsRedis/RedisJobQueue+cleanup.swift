@@ -78,7 +78,7 @@ extension RedisJobQueue {
 
     /// clean up job name.
     ///
-    /// Use this with the ``JobSchedule`` to schedule a cleanup of
+    /// Use this with the ``/Jobs/JobSchedule`` to schedule a cleanup of
     /// failed, cancelled or completed jobs
     public var cleanupJob: JobName<RedisJobCleanupParameters> {
         .init("_Jobs_RedisCleanup_\(self.configuration.queueName)")
@@ -116,6 +116,8 @@ extension RedisJobQueue {
     ///   - failedJobs: What to do with jobs tagged as failed
     ///   - processingJobs: What to do with jobs tagged as processing
     ///   - pendingJobs: What to do with jobs tagged as pending
+    ///   - cancelledJobs: What to do with jobs tagged as cancelled
+    ///   - completedJobs: What to do with jobs tagged as completed
     /// - Throws:
     public func cleanup(
         failedJobs: JobCleanup = .doNothing,
