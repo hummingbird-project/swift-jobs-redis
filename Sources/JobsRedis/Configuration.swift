@@ -21,7 +21,7 @@ extension RedisJobQueue {
         /// queue name
         let queueName: String
         /// Pending queue redis key
-        let queueKey: RedisKey
+        let pendingQueueKey: RedisKey
         /// Processing queue redis key
         let processingQueueKey: RedisKey
         /// Paused queue redis key
@@ -45,7 +45,7 @@ extension RedisJobQueue {
             retentionPolicy: RetentionPolicy = .init()
         ) {
             self.queueName = queueName
-            self.queueKey = RedisKey("\(queueName).pending")
+            self.pendingQueueKey = RedisKey("\(queueName).pending")
             self.pausedQueueKey = RedisKey("\(queueName).paused")
             self.processingQueueKey = RedisKey("\(queueName).processing")
             self.failedQueueKey = RedisKey("\(queueName).failed")

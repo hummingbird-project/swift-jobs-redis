@@ -137,7 +137,7 @@ public final class RedisJobQueue: JobQueueDriver {
         let buffer = try self.jobRegistry.encode(jobRequest: jobRequest)
         _ = try await self.scripts.addToQueue.runScript(
             on: self.redisConnectionPool.wrappedValue,
-            keys: [jobID.redisKey(for: self), self.configuration.queueKey],
+            keys: [jobID.redisKey(for: self), self.configuration.pendingQueueKey],
             arguments: [
                 .init(from: buffer),
                 .init(from: jobID.description),
@@ -218,7 +218,7 @@ public final class RedisJobQueue: JobQueueDriver {
     func popFirst() async throws -> JobQueueResult<JobID>? {
         let value = try await self.scripts.pop.runScript(
             on: self.redisConnectionPool.wrappedValue,
-            keys: [self.configuration.queueKey, self.configuration.processingQueueKey],
+            keys: [self.configuration.pendingQueueKey, self.configuration.processingQueueKey],
             arguments: [.init(from: Date.now.timeIntervalSince1970)]
         )
         guard let jobID = JobID(fromRESP: value) else {
@@ -239,10 +239,6 @@ public final class RedisJobQueue: JobQueueDriver {
 
     func get(jobID: JobID) async throws -> ByteBuffer? {
         try await self.redisConnectionPool.wrappedValue.get(jobID.redisKey(for: self)).get().byteBuffer
-    }
-
-    func delete(jobID: JobID) async throws {
-        _ = try await self.redisConnectionPool.wrappedValue.delete(jobID.redisKey(for: self)).get()
     }
 
     func delete(jobIDs: [JobID]) async throws {
@@ -287,13 +283,13 @@ extension RedisJobQueue: CancellableJobQueue {
         if self.configuration.retentionPolicy.cancelled == .retain {
             _ = try await self.scripts.cancelAndRetain.runScript(
                 on: self.redisConnectionPool.wrappedValue,
-                keys: [self.configuration.queueKey, self.configuration.cancelledQueueKey],
+                keys: [self.configuration.pendingQueueKey, self.configuration.cancelledQueueKey],
                 arguments: [.init(from: jobID.description), .init(from: Date.now.timeIntervalSince1970)]
             )
         } else {
             _ = try await self.scripts.cancel.runScript(
                 on: self.redisConnectionPool.wrappedValue,
-                keys: [self.configuration.queueKey, jobID.redisKey(for: self)],
+                keys: [self.configuration.pendingQueueKey, jobID.redisKey(for: self)],
                 arguments: [.init(from: jobID.description)]
             )
         }
@@ -309,7 +305,7 @@ extension RedisJobQueue: ResumableJobQueue {
     public func pause(jobID: JobID) async throws {
         _ = try await self.scripts.pauseResume.runScript(
             on: self.redisConnectionPool.wrappedValue,
-            keys: [self.configuration.queueKey, self.configuration.pausedQueueKey],
+            keys: [self.configuration.pendingQueueKey, self.configuration.pausedQueueKey],
             arguments: [.init(from: jobID.description)]
         )
     }
@@ -322,7 +318,7 @@ extension RedisJobQueue: ResumableJobQueue {
     public func resume(jobID: JobID) async throws {
         _ = try await self.scripts.pauseResume.runScript(
             on: self.redisConnectionPool.wrappedValue,
-            keys: [self.configuration.pausedQueueKey, self.configuration.queueKey],
+            keys: [self.configuration.pausedQueueKey, self.configuration.pendingQueueKey],
             arguments: [.init(from: jobID.description)]
         )
     }
