@@ -19,25 +19,25 @@ extension RedisJobQueue {
     /// Redis Job queue configuration
     public struct Configuration: Sendable {
         /// queue name
-        let queueName: String
+        public let queueName: String
         /// Pending queue redis key
-        let pendingQueueKey: RedisKey
+        public let pendingQueueKey: RedisKey
         /// Processing queue redis key
-        let processingQueueKey: RedisKey
+        public let processingQueueKey: RedisKey
         /// Paused queue redis key
-        let pausedQueueKey: RedisKey
+        public let pausedQueueKey: RedisKey
         /// Failed queue redis key
-        let failedQueueKey: RedisKey
+        public let failedQueueKey: RedisKey
         /// Cancelled queue redis key
-        let cancelledQueueKey: RedisKey
+        public let cancelledQueueKey: RedisKey
         /// Completed queue redis key
-        let completedQueueKey: RedisKey
+        public let completedQueueKey: RedisKey
         /// Prefix for metadata
-        let metadataKeyPrefix: String
+        public let metadataKeyPrefix: String
         /// Queue poll time to wait if queue empties
-        let pollTime: Duration
+        public let pollTime: Duration
         /// Retention policy for jobs
-        let retentionPolicy: RetentionPolicy
+        public let retentionPolicy: RetentionPolicy
 
         public init(
             queueName: String = "_hbJobQueue",
@@ -51,7 +51,7 @@ extension RedisJobQueue {
             self.failedQueueKey = RedisKey("\(queueName).failed")
             self.cancelledQueueKey = RedisKey("\(queueName).cancelled")
             self.completedQueueKey = RedisKey("\(queueName).completed")
-            self.metadataKeyPrefix = "\(queueName).metadata"
+            self.metadataKeyPrefix = "\(queueName).metadata."
             self.pollTime = pollTime
             self.retentionPolicy = retentionPolicy
         }

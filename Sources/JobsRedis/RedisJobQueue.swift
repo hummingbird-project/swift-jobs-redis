@@ -28,6 +28,7 @@ public final class RedisJobQueue: JobQueueDriver {
     public struct JobID: Sendable, CustomStringConvertible, Equatable, RESPValueConvertible {
         let value: String
 
+        @usableFromInline
         init() {
             self.value = UUID().uuidString
         }
@@ -45,6 +46,7 @@ public final class RedisJobQueue: JobQueueDriver {
             self.value.convertedToRESPValue()
         }
 
+        @usableFromInline
         func redisKey(for queue: RedisJobQueue) -> RedisKey { .init("\(queue.configuration.queueName)/\(self.description)") }
 
         /// String description of Identifier
@@ -84,9 +86,13 @@ public final class RedisJobQueue: JobQueueDriver {
         }
     }
 
+    @usableFromInline
     let redisConnectionPool: UnsafeTransfer<RedisConnectionPool>
+    @usableFromInline
     let configuration: Configuration
+    @usableFromInline
     let isStopped: ManagedAtomic<Bool>
+    @usableFromInline
     let scripts: RedisScripts
 
     /// Initialize redis job queue
@@ -115,7 +121,9 @@ public final class RedisJobQueue: JobQueueDriver {
     ///   - jobRequest: Job request
     ///   - options: Job options
     /// - Returns: Job ID
-    @discardableResult public func push<Parameters>(_ jobRequest: JobRequest<Parameters>, options: JobOptions) async throws -> JobID {
+    @discardableResult
+    @inlinable
+    public func push<Parameters>(_ jobRequest: JobRequest<Parameters>, options: JobOptions) async throws -> JobID {
         let jobInstanceID = JobID()
         try await self.push(jobID: jobInstanceID, jobRequest: jobRequest, options: options)
         return jobInstanceID
@@ -126,6 +134,7 @@ public final class RedisJobQueue: JobQueueDriver {
     ///   - id: Job instance ID
     ///   - jobRequest: Job request
     ///   - options: Job retry options
+    @inlinable
     public func retry<Parameters>(_ id: JobID, jobRequest: JobRequest<Parameters>, options: JobRetryOptions) async throws {
         let options = JobOptions(delayUntil: options.delayUntil)
         try await self.finished(jobID: id)
@@ -133,7 +142,8 @@ public final class RedisJobQueue: JobQueueDriver {
     }
 
     /// Helper for enqueuing jobs
-    private func push<Parameters>(jobID: JobID, jobRequest: JobRequest<Parameters>, options: JobOptions) async throws {
+    @usableFromInline
+    func push<Parameters>(jobID: JobID, jobRequest: JobRequest<Parameters>, options: JobOptions) async throws {
         let buffer = try self.jobRegistry.encode(jobRequest: jobRequest)
         _ = try await self.scripts.addToQueue.runScript(
             on: self.redisConnectionPool.wrappedValue,
@@ -151,6 +161,7 @@ public final class RedisJobQueue: JobQueueDriver {
     /// Removes  job id from processing queue
     /// - Parameters:
     ///   - jobID: Job id
+    @inlinable
     public func finished(jobID: JobID) async throws {
         if self.configuration.retentionPolicy.completed == .retain {
             _ = try await self.scripts.completedAndRetain.runScript(
@@ -172,6 +183,7 @@ public final class RedisJobQueue: JobQueueDriver {
     /// Removes  job id from processing queue, adds to failed queue
     /// - Parameters:
     ///   - jobID: Job id
+    @inlinable
     public func failed(jobID: JobID, error: Error) async throws {
         if self.configuration.retentionPolicy.failed == .retain {
             _ = try await self.scripts.moveToFailed.runScript(
@@ -198,8 +210,9 @@ public final class RedisJobQueue: JobQueueDriver {
     /// Get job queue metadata
     /// - Parameter key: Metadata key
     /// - Returns: Associated ByteBuffer
+    @inlinable
     public func getMetadata(_ key: String) async throws -> ByteBuffer? {
-        let key = "\(self.configuration.metadataKeyPrefix).\(key)"
+        let key = "\(self.configuration.metadataKeyPrefix)\(key)"
         return try await self.redisConnectionPool.wrappedValue.get(.init(key)).get().byteBuffer
     }
 
@@ -207,14 +220,16 @@ public final class RedisJobQueue: JobQueueDriver {
     /// - Parameters:
     ///   - key: Metadata key
     ///   - value: Associated ByteBuffer
+    @inlinable
     public func setMetadata(key: String, value: ByteBuffer) async throws {
-        let key = "\(self.configuration.metadataKeyPrefix).\(key)"
+        let key = "\(self.configuration.metadataKeyPrefix)\(key)"
         try await self.redisConnectionPool.wrappedValue.set(.init(key), to: value).get()
     }
 
     /// Pop Job off queue and add to pending queue
     /// - Parameter eventLoop: eventLoop to do work on
     /// - Returns: queued job
+    @usableFromInline
     func popFirst() async throws -> JobQueueResult<JobID>? {
         let value = try await self.scripts.pop.runScript(
             on: self.redisConnectionPool.wrappedValue,
@@ -252,8 +267,10 @@ public final class RedisJobQueue: JobQueueDriver {
 extension RedisJobQueue {
     public typealias Element = JobQueueResult<JobID>
     public struct AsyncIterator: AsyncIteratorProtocol {
+        @usableFromInline
         let queue: RedisJobQueue
 
+        @inlinable
         public func next() async throws -> Element? {
             while true {
                 if self.queue.isStopped.load(ordering: .relaxed) {
@@ -279,6 +296,7 @@ extension RedisJobQueue: CancellableJobQueue {
     /// Removes it from the pending queue
     /// - Parameters:
     ///  - jobID: Job id
+    @inlinable
     public func cancel(jobID: JobID) async throws {
         if self.configuration.retentionPolicy.cancelled == .retain {
             _ = try await self.scripts.cancelAndRetain.runScript(
@@ -302,6 +320,7 @@ extension RedisJobQueue: ResumableJobQueue {
     /// Removes it from the pending queue, adds to paused queue
     /// - Parameters:
     ///  - jobID: Job id
+    @inlinable
     public func pause(jobID: JobID) async throws {
         _ = try await self.scripts.pauseResume.runScript(
             on: self.redisConnectionPool.wrappedValue,
@@ -315,6 +334,7 @@ extension RedisJobQueue: ResumableJobQueue {
     /// Removes it from the paused queue, adds to pending queue
     /// - Parameters:
     ///  - jobID: Job id
+    @inlinable
     public func resume(jobID: JobID) async throws {
         _ = try await self.scripts.pauseResume.runScript(
             on: self.redisConnectionPool.wrappedValue,

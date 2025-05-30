@@ -15,8 +15,10 @@
 import Logging
 @preconcurrency import RediStack
 
-struct RedisScripts {
-    struct RedisScript {
+@usableFromInline
+struct RedisScripts: Sendable {
+    @usableFromInline
+    struct RedisScript: Sendable {
         let script: String
         let sha1: String
 
@@ -25,6 +27,7 @@ struct RedisScripts {
             self.sha1 = try await redisConnectionPool.scriptLoad(script).get()
         }
 
+        @usableFromInline
         func runScript(
             on redisConnectionPool: RedisConnectionPool,
             keys: [RedisKey],
@@ -41,14 +44,21 @@ struct RedisScripts {
 
     let addToQueue: RedisScript
     let moveToProcessing: RedisScript
+    @usableFromInline
     let failedAndDelete: RedisScript
+    @usableFromInline
     let moveToFailed: RedisScript
     let moveToPending: RedisScript
     let pop: RedisScript
+    @usableFromInline
     let completed: RedisScript
+    @usableFromInline
     let completedAndRetain: RedisScript
+    @usableFromInline
     let cancel: RedisScript
+    @usableFromInline
     let cancelAndRetain: RedisScript
+    @usableFromInline
     let pauseResume: RedisScript
     let rerunQueue: RedisScript
     let rerunSortedSet: RedisScript
