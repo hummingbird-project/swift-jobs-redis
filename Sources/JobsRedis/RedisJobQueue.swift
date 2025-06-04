@@ -24,7 +24,7 @@ import class Foundation.JSONDecoder
 import struct Foundation.UUID
 
 /// Redis implementation of job queue driver
-public final class RedisJobQueue: JobQueueDriver {
+public final class RedisJobQueue: JobQueueDriver, JobMetadataDriver {
     public struct JobID: Sendable, CustomStringConvertible, Equatable, RESPValueConvertible {
         let value: String
 
