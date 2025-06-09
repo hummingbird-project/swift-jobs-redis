@@ -62,7 +62,6 @@ final class RedisJobsTests: XCTestCase {
         let redis = try createRedisConnectionPool(logger: logger)
         return try await JobQueue(
             .redis(redis, configuration: configuration, logger: logger),
-            numWorkers: numWorkers,
             logger: logger,
             options: .init(
                 defaultRetryStrategy: .exponentialJitter(maxBackoff: .milliseconds(10))
@@ -85,7 +84,7 @@ final class RedisJobsTests: XCTestCase {
         return try await withThrowingTaskGroup(of: Void.self) { group in
             let serviceGroup = ServiceGroup(
                 configuration: .init(
-                    services: [redisService, jobQueue],
+                    services: [redisService, jobQueue.processor(options: .init(numWorkers: numWorkers))],
                     gracefulShutdownSignals: [.sigterm, .sigint],
                     logger: Logger(label: "JobQueueService")
                 )
@@ -425,13 +424,11 @@ final class RedisJobsTests: XCTestCase {
         let redisService = RedisConnectionPoolService(redis)
         let jobQueue = try await JobQueue(
             RedisJobQueue(redis, logger: logger),
-            numWorkers: 2,
             logger: logger
         )
         jobQueue.registerJob(job)
         let jobQueue2 = try await JobQueue(
             RedisJobQueue(redis, logger: logger),
-            numWorkers: 2,
             logger: logger
         )
         jobQueue2.registerJob(job)
@@ -439,7 +436,11 @@ final class RedisJobsTests: XCTestCase {
         try await withThrowingTaskGroup(of: Void.self) { group in
             let serviceGroup = ServiceGroup(
                 configuration: .init(
-                    services: [redisService, jobQueue, jobQueue2],
+                    services: [
+                        redisService,
+                        jobQueue.processor(options: .init(numWorkers: 2)),
+                        jobQueue2.processor(options: .init(numWorkers: 2)),
+                    ],
                     gracefulShutdownSignals: [.sigterm, .sigint],
                     logger: logger
                 )
@@ -506,7 +507,7 @@ final class RedisJobsTests: XCTestCase {
         try await withThrowingTaskGroup(of: Void.self) { group in
             let serviceGroup = ServiceGroup(
                 configuration: .init(
-                    services: [redisService, jobQueue],
+                    services: [redisService, jobQueue.processor()],
                     gracefulShutdownSignals: [.sigterm, .sigint],
                     logger: Logger(label: "JobQueueService")
                 )
@@ -556,7 +557,7 @@ final class RedisJobsTests: XCTestCase {
         try await withThrowingTaskGroup(of: Void.self) { group in
             let serviceGroup = ServiceGroup(
                 configuration: .init(
-                    services: [redisService, jobQueue],
+                    services: [redisService, jobQueue.processor()],
                     gracefulShutdownSignals: [.sigterm, .sigint],
                     logger: Logger(label: "JobQueueService")
                 )
