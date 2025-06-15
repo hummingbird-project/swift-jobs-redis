@@ -858,6 +858,36 @@ final class RedisJobsTests: XCTestCase {
             }
         }
     }
+
+    func testMetadataLock() async throws {
+        try await self.testJobQueue(numWorkers: 1) { jobQueue in
+            // 1 - acquire lock
+            var result = try await jobQueue.queue.acquireLock(key: "lock", id: .init(string: "one"), expiresIn: 10)
+            XCTAssertTrue(result)
+            // 2 - check I can acquire lock once I already have the lock
+            result = try await jobQueue.queue.acquireLock(key: "lock", id: .init(string: "one"), expiresIn: 10)
+            XCTAssertTrue(result)
+            // 3 - check I cannot acquire lock if a different identifer has it
+            result = try await jobQueue.queue.acquireLock(key: "lock", id: .init(string: "two"), expiresIn: 10)
+            XCTAssertFalse(result)
+            // 4 - release lock with identifier that doesn own it
+            try await jobQueue.queue.releaseLock(key: "lock", id: .init(string: "two"))
+            // 5 - check I still cannot acquire lock
+            result = try await jobQueue.queue.acquireLock(key: "lock", id: .init(string: "two"), expiresIn: 10)
+            XCTAssertFalse(result)
+            // 6 - release lock
+            try await jobQueue.queue.releaseLock(key: "lock", id: .init(string: "one"))
+            // 7 - check I can acquire lock after it has been released
+            result = try await jobQueue.queue.acquireLock(key: "lock", id: .init(string: "two"), expiresIn: 1)
+            XCTAssertTrue(result)
+            // 8 - check I can acquire lock after it has expired
+            try await Task.sleep(for: .seconds(1.5))
+            result = try await jobQueue.queue.acquireLock(key: "lock", id: .init(string: "one"), expiresIn: 10)
+            XCTAssertTrue(result)
+            // 9 - release lock
+            try await jobQueue.queue.releaseLock(key: "lock", id: .init(string: "one"))
+        }
+    }
 }
 
 struct RedisConnectionPoolService: Service {

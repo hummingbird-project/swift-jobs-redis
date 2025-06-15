@@ -12,9 +12,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-import Foundation
 import Jobs
 @preconcurrency import RediStack
+
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
+import Foundation
+#endif
 
 /// Parameters for Cleanup job
 public struct RedisJobCleanupParameters: Sendable & Codable {

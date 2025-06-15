@@ -18,10 +18,11 @@ import Logging
 import NIOCore
 @preconcurrency import RediStack
 
-import struct Foundation.Data
-import struct Foundation.Date
-import class Foundation.JSONDecoder
-import struct Foundation.UUID
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
+import Foundation
+#endif
 
 /// Redis implementation of job queue driver
 public final class RedisJobQueue: JobQueueDriver {
@@ -207,25 +208,6 @@ public final class RedisJobQueue: JobQueueDriver {
 
     public func shutdownGracefully() async {}
 
-    /// Get job queue metadata
-    /// - Parameter key: Metadata key
-    /// - Returns: Associated ByteBuffer
-    @inlinable
-    public func getMetadata(_ key: String) async throws -> ByteBuffer? {
-        let key = "\(self.configuration.metadataKeyPrefix)\(key)"
-        return try await self.redisConnectionPool.wrappedValue.get(.init(key)).get().byteBuffer
-    }
-
-    /// Set job queue metadata
-    /// - Parameters:
-    ///   - key: Metadata key
-    ///   - value: Associated ByteBuffer
-    @inlinable
-    public func setMetadata(key: String, value: ByteBuffer) async throws {
-        let key = "\(self.configuration.metadataKeyPrefix)\(key)"
-        try await self.redisConnectionPool.wrappedValue.set(.init(key), to: value).get()
-    }
-
     /// Pop Job off queue and add to pending queue
     /// - Parameter eventLoop: eventLoop to do work on
     /// - Returns: queued job
@@ -261,6 +243,60 @@ public final class RedisJobQueue: JobQueueDriver {
     }
 
     let jobRegistry: JobRegistry
+}
+
+extension RedisJobQueue: JobMetadataDriver {
+    /// Get job queue metadata
+    /// - Parameter key: Metadata key
+    /// - Returns: Associated ByteBuffer
+    @inlinable
+    public func getMetadata(_ key: String) async throws -> ByteBuffer? {
+        let key = "\(self.configuration.metadataKeyPrefix)\(key)"
+        return try await self.redisConnectionPool.wrappedValue.get(.init(key)).get().byteBuffer
+    }
+
+    /// Set job queue metadata
+    /// - Parameters:
+    ///   - key: Metadata key
+    ///   - value: Associated ByteBuffer
+    @inlinable
+    public func setMetadata(key: String, value: ByteBuffer) async throws {
+        let key = "\(self.configuration.metadataKeyPrefix)\(key)"
+        try await self.redisConnectionPool.wrappedValue.set(.init(key), to: value).get()
+    }
+
+    /// Acquire metadata lock
+    ///
+    /// - Parameters:
+    ///   - key: Metadata key
+    ///   - id: Lock identifier
+    ///   - expiresIn: When lock will expire
+    /// - Returns: If lock was acquired
+    @inlinable
+    public func acquireLock(key: String, id: ByteBuffer, expiresIn: TimeInterval) async throws -> Bool {
+        let key = "\(self.configuration.metadataKeyPrefix)\(key)"
+        let response = try await self.scripts.acquireLock.runScript(
+            on: self.redisConnectionPool.wrappedValue,
+            keys: [.init(key)],
+            arguments: [.init(from: id), .init(from: Int(Date.now.timeIntervalSince1970 + expiresIn))]
+        )
+        return !response.isNull
+    }
+
+    /// Release metadata lock
+    ///
+    /// - Parameters:
+    ///   - key: Metadata key
+    ///   - id: Lock identifier
+    @inlinable
+    public func releaseLock(key: String, id: ByteBuffer) async throws {
+        let key = "\(self.configuration.metadataKeyPrefix)\(key)"
+        _ = try await self.scripts.releaseLock.runScript(
+            on: self.redisConnectionPool.wrappedValue,
+            keys: [.init(key)],
+            arguments: [.init(from: id)]
+        )
+    }
 }
 
 /// extend RedisJobQueue to conform to AsyncSequence
