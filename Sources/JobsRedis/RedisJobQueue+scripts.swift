@@ -214,7 +214,7 @@ extension RedisJobQueue {
                 end
                 """,
                 redisConnectionPool: redisConnectionPool
-            ),
+            )
         )
         logger.debug("AddToQueue script with SHA1 \(scripts.addToQueue.sha1)")
         logger.debug("Move to processing script with SHA1 \(scripts.moveToProcessing.sha1)")
