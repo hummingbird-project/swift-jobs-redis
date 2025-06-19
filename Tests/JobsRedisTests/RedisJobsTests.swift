@@ -593,6 +593,19 @@ final class RedisJobsTests: XCTestCase {
         XCTAssertEqual(metadata2, value2)
     }
 
+    func testMultipleQueueMetadata() async throws {
+        try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "queue1")) { jobQueue1 in
+            try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "queue2")) { jobQueue2 in
+                try await jobQueue1.queue.setMetadata(key: "test", value: .init(string: "queue1"))
+                try await jobQueue2.queue.setMetadata(key: "test", value: .init(string: "queue2"))
+                let value1 = try await jobQueue1.queue.getMetadata("test")
+                let value2 = try await jobQueue2.queue.getMetadata("test")
+                XCTAssertEqual(value1.map { String(buffer: $0) }, "queue1")
+                XCTAssertEqual(value2.map { String(buffer: $0) }, "queue2")
+            }
+        }
+    }
+
     func testCompletedJobRetention() async throws {
         struct TestParameters: JobParameters {
             static let jobName = "testCompletedJobRetention"
@@ -886,6 +899,27 @@ final class RedisJobsTests: XCTestCase {
             XCTAssertTrue(result)
             // 9 - release lock
             try await jobQueue.queue.releaseLock(key: "lock", id: .init(string: "one"))
+        }
+    }
+
+    func testMultipleQueueMetadataLock() async throws {
+        try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "queue1")) { jobQueue1 in
+            try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "queue2")) { jobQueue2 in
+                let result1 = try await jobQueue1.queue.acquireLock(
+                    key: "testMultipleQueueMetadataLock",
+                    id: .init(string: "queue1"),
+                    expiresIn: 60
+                )
+                let result2 = try await jobQueue2.queue.acquireLock(
+                    key: "testMultipleQueueMetadataLock",
+                    id: .init(string: "queue2"),
+                    expiresIn: 60
+                )
+                XCTAssert(result1)
+                XCTAssert(result2)
+                try await jobQueue1.queue.releaseLock(key: "testMultipleQueueMetadataLock", id: .init(string: "queue1"))
+                try await jobQueue2.queue.releaseLock(key: "testMultipleQueueMetadataLock", id: .init(string: "queue2"))
+            }
         }
     }
 }
