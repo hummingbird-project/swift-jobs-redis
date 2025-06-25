@@ -62,6 +62,10 @@ struct RedisScripts: Sendable {
     let pauseResume: RedisScript
     let rerunQueue: RedisScript
     let rerunSortedSet: RedisScript
+    @usableFromInline
+    let acquireLock: RedisScript
+    @usableFromInline
+    let releaseLock: RedisScript
 }
 
 extension RedisJobQueue {
@@ -187,6 +191,27 @@ extension RedisJobQueue {
                 redis.call("ZUNIONSTORE", KEYS[2], 2, KEYS[1], KEYS[2])
                 redis.call("DEL", KEYS[1])
                 return redis.status_reply('OK')
+                """,
+                redisConnectionPool: redisConnectionPool
+            ),
+            acquireLock: .init(
+                """
+                if redis.call("GET", KEYS[1]) == ARGV[1] then
+                    redis.call("EXPIREAT", KEYS[1], ARGV[2])
+                    return redis.status_reply('OK')
+                else
+                    return redis.call("SET", KEYS[1], ARGV[1], "NX", "EXAT", ARGV[2])
+                end
+                """,
+                redisConnectionPool: redisConnectionPool
+            ),
+            releaseLock: .init(
+                """
+                if redis.call("GET", KEYS[1]) == ARGV[1] then
+                    redis.call("DEL", KEYS[1])
+                else
+                    return 0
+                end
                 """,
                 redisConnectionPool: redisConnectionPool
             )

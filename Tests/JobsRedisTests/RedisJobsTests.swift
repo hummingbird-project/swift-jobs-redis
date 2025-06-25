@@ -593,6 +593,19 @@ final class RedisJobsTests: XCTestCase {
         XCTAssertEqual(metadata2, value2)
     }
 
+    func testMultipleQueueMetadata() async throws {
+        try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "queue1")) { jobQueue1 in
+            try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "queue2")) { jobQueue2 in
+                try await jobQueue1.queue.setMetadata(key: "test", value: .init(string: "queue1"))
+                try await jobQueue2.queue.setMetadata(key: "test", value: .init(string: "queue2"))
+                let value1 = try await jobQueue1.queue.getMetadata("test")
+                let value2 = try await jobQueue2.queue.getMetadata("test")
+                XCTAssertEqual(value1.map { String(buffer: $0) }, "queue1")
+                XCTAssertEqual(value2.map { String(buffer: $0) }, "queue2")
+            }
+        }
+    }
+
     func testCompletedJobRetention() async throws {
         struct TestParameters: JobParameters {
             static let jobName = "testCompletedJobRetention"
@@ -855,6 +868,57 @@ final class RedisJobsTests: XCTestCase {
                     withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
                 ).get()
                 XCTAssertEqual(failedJobsCount, 1)
+            }
+        }
+    }
+
+    func testMetadataLock() async throws {
+        try await self.testJobQueue(numWorkers: 1) { jobQueue in
+            // 1 - acquire lock
+            var result = try await jobQueue.queue.acquireLock(key: "lock", id: .init(string: "one"), expiresIn: 10)
+            XCTAssertTrue(result)
+            // 2 - check I can acquire lock once I already have the lock
+            result = try await jobQueue.queue.acquireLock(key: "lock", id: .init(string: "one"), expiresIn: 10)
+            XCTAssertTrue(result)
+            // 3 - check I cannot acquire lock if a different identifer has it
+            result = try await jobQueue.queue.acquireLock(key: "lock", id: .init(string: "two"), expiresIn: 10)
+            XCTAssertFalse(result)
+            // 4 - release lock with identifier that doesn own it
+            try await jobQueue.queue.releaseLock(key: "lock", id: .init(string: "two"))
+            // 5 - check I still cannot acquire lock
+            result = try await jobQueue.queue.acquireLock(key: "lock", id: .init(string: "two"), expiresIn: 10)
+            XCTAssertFalse(result)
+            // 6 - release lock
+            try await jobQueue.queue.releaseLock(key: "lock", id: .init(string: "one"))
+            // 7 - check I can acquire lock after it has been released
+            result = try await jobQueue.queue.acquireLock(key: "lock", id: .init(string: "two"), expiresIn: 1)
+            XCTAssertTrue(result)
+            // 8 - check I can acquire lock after it has expired
+            try await Task.sleep(for: .seconds(1.5))
+            result = try await jobQueue.queue.acquireLock(key: "lock", id: .init(string: "one"), expiresIn: 10)
+            XCTAssertTrue(result)
+            // 9 - release lock
+            try await jobQueue.queue.releaseLock(key: "lock", id: .init(string: "one"))
+        }
+    }
+
+    func testMultipleQueueMetadataLock() async throws {
+        try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "queue1")) { jobQueue1 in
+            try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "queue2")) { jobQueue2 in
+                let result1 = try await jobQueue1.queue.acquireLock(
+                    key: "testMultipleQueueMetadataLock",
+                    id: .init(string: "queue1"),
+                    expiresIn: 60
+                )
+                let result2 = try await jobQueue2.queue.acquireLock(
+                    key: "testMultipleQueueMetadataLock",
+                    id: .init(string: "queue2"),
+                    expiresIn: 60
+                )
+                XCTAssert(result1)
+                XCTAssert(result2)
+                try await jobQueue1.queue.releaseLock(key: "testMultipleQueueMetadataLock", id: .init(string: "queue1"))
+                try await jobQueue2.queue.releaseLock(key: "testMultipleQueueMetadataLock", id: .init(string: "queue2"))
             }
         }
     }
