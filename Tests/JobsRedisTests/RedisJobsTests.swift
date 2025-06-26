@@ -527,7 +527,7 @@ struct RedisJobsTests {
             static let jobName = "testPausedAndThenResume"
             let value: Int
         }
-        let counter = Counter()
+        let expectation = TestExpectation()
         let jobRunSequence: NIOLockedValueBox<[Int]> = .init([])
         var logger = Logger(label: #function)
         logger.logLevel = .trace
@@ -545,7 +545,7 @@ struct RedisJobsTests {
             jobRunSequence.withLockedValue {
                 $0.append(parameters.value)
             }
-            counter.increment()
+            expectation.trigger()
         }
 
         try await withThrowingTaskGroup(of: Void.self) { group in
@@ -565,9 +565,9 @@ struct RedisJobsTests {
             group.addTask {
                 try await serviceGroup.run()
             }
-            try await counter.waitFor(count: 1)
+            try await expectation.wait(count: 1)
             try await jobQueue.resumeJob(jobID: pausableJob)
-            try await counter.waitFor(count: 1)
+            try await expectation.wait(count: 1)
             await serviceGroup.triggerGracefulShutdown()
         }
         #expect(jobRunSequence.withLockedValue { $0 } == [30, 15])
@@ -934,35 +934,5 @@ struct RedisConnectionPoolService: Service {
         let promise = self.pool.eventLoop.makePromise(of: Void.self)
         self.pool.close(promise: promise)
         return try await promise.futureResult.get()
-    }
-}
-
-struct Counter {
-    let stream: AsyncStream<Void>
-    let continuation: AsyncStream<Void>.Continuation
-
-    init() {
-        (self.stream, self.continuation) = AsyncStream.makeStream(of: Void.self)
-    }
-
-    func increment() {
-        self.continuation.yield()
-    }
-
-    func waitFor(count: Int, timeout: Duration = .seconds(5)) async throws {
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                var iterator = stream.makeAsyncIterator()
-                for _ in 0..<count {
-                    _ = await iterator.next()
-                }
-
-            }
-            group.addTask {
-                try await Task.sleep(for: timeout)
-            }
-            try await group.next()
-            group.cancelAll()
-        }
     }
 }
