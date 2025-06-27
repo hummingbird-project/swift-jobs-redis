@@ -72,7 +72,7 @@ struct RedisJobsTests {
         test: (JobQueue<RedisJobQueue>) async throws -> T,
         function: String = #function
     ) async throws -> T {
-        let jobQueue = try await createJobQueue(numWorkers: numWorkers, configuration: configuration)
+        let jobQueue = try await createJobQueue(numWorkers: numWorkers, configuration: configuration, function: function)
         let redisService = RedisConnectionPoolService(jobQueue.queue.redisConnectionPool.wrappedValue)
         return try await withThrowingTaskGroup(of: Void.self) { group in
             let serviceGroup = ServiceGroup(
@@ -174,7 +174,7 @@ struct RedisJobsTests {
             }
             try await jobQueue.push(
                 TestParameters(value: 100),
-                options: .init(delayUntil: Date.now.addingTimeInterval(1))
+                options: .init(delayUntil: Date.now.addingTimeInterval(2))
             )
             try await jobQueue.push(TestParameters(value: 50))
             try await jobQueue.push(TestParameters(value: 10))
