@@ -12,11 +12,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-import Atomics
 import Jobs
 import Logging
 import NIOCore
 @preconcurrency import RediStack
+import Synchronization
 
 #if canImport(FoundationEssentials)
 import FoundationEssentials
@@ -92,7 +92,7 @@ public final class RedisJobQueue: JobQueueDriver {
     @usableFromInline
     let configuration: Configuration
     @usableFromInline
-    let isStopped: ManagedAtomic<Bool>
+    let isStopped: Atomic<Bool>
     @usableFromInline
     let scripts: RedisScripts
 
