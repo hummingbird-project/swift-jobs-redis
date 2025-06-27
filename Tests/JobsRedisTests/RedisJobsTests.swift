@@ -12,15 +12,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-import Atomics
 import Foundation
 import Jobs
 import Logging
-import NIOConcurrencyHelpers
 import NIOCore
 import NIOPosix
 @preconcurrency import RediStack
 import ServiceLifecycle
+import Synchronization
 import Testing
 
 @testable import JobsRedis
@@ -125,20 +124,20 @@ struct RedisJobsTests {
             static let jobName = "testMultipleWorkers"
             let value: Int
         }
-        let runningJobCounter = ManagedAtomic(0)
-        let maxRunningJobCounter = ManagedAtomic(0)
+        let runningJobCounter = Atomic(0)
+        let maxRunningJobCounter = Atomic(0)
         let expectation = TestExpectation()
 
         try await self.testJobQueue(numWorkers: 4, configuration: .init(queueName: #function)) { jobQueue in
             jobQueue.registerJob(parameters: TestParameters.self) { parameters, context in
-                let runningJobs = runningJobCounter.wrappingIncrementThenLoad(by: 1, ordering: .relaxed)
+                let runningJobs = runningJobCounter.wrappingAdd(1, ordering: .relaxed).newValue
                 if runningJobs > maxRunningJobCounter.load(ordering: .relaxed) {
                     maxRunningJobCounter.store(runningJobs, ordering: .relaxed)
                 }
                 try await Task.sleep(for: .milliseconds(Int.random(in: 10..<50)))
                 context.logger.info("Parameters=\(parameters)")
                 expectation.trigger()
-                runningJobCounter.wrappingDecrement(by: 1, ordering: .relaxed)
+                runningJobCounter.wrappingSubtract(1, ordering: .relaxed)
             }
 
             try await jobQueue.push(TestParameters(value: 1))
@@ -165,10 +164,10 @@ struct RedisJobsTests {
             let value: Int
         }
         let expectation = TestExpectation()
-        let jobExecutionSequence: NIOLockedValueBox<[Int]> = .init([])
+        let jobExecutionSequence: Mutex<[Int]> = .init([])
         try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: #function)) { jobQueue in
             jobQueue.registerJob(parameters: TestParameters.self) { parameters, _ in
-                jobExecutionSequence.withLockedValue {
+                jobExecutionSequence.withLock {
                     $0.append(parameters.value)
                 }
                 expectation.trigger()
@@ -182,7 +181,7 @@ struct RedisJobsTests {
 
             try await expectation.wait(for: "delayed job was called", count: 3)
         }
-        jobExecutionSequence.withLockedValue {
+        jobExecutionSequence.withLock {
             #expect($0 == [50, 10, 100])
         }
     }
@@ -223,7 +222,7 @@ struct RedisJobsTests {
             static let jobName = "testErrorRetryAndThenSucceed"
         }
         let expectation = TestExpectation()
-        let currentJobTryCount: NIOLockedValueBox<Int> = .init(0)
+        let currentJobTryCount: Mutex<Int> = .init(0)
         struct FailedError: Error {}
         try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: #function)) { jobQueue in
             jobQueue.registerJob(
@@ -231,12 +230,12 @@ struct RedisJobsTests {
                 retryStrategy: .exponentialJitter(maxAttempts: 3, maxBackoff: .milliseconds(100))
             ) { _, _ in
                 defer {
-                    currentJobTryCount.withLockedValue {
+                    currentJobTryCount.withLock {
                         $0 += 1
                     }
                 }
                 expectation.trigger()
-                if currentJobTryCount.withLockedValue({ $0 }) == 0 {
+                if currentJobTryCount.withLock({ $0 }) == 0 {
                     throw FailedError()
                 }
             }
@@ -255,7 +254,7 @@ struct RedisJobsTests {
                 .get()
             #expect(processingJobs == 0)
         }
-        #expect(currentJobTryCount.withLockedValue { $0 } == 2)
+        #expect(currentJobTryCount.withLock { $0 } == 2)
     }
 
     @Test func testJobSerialization() async throws {
@@ -313,19 +312,19 @@ struct RedisJobsTests {
             static let jobName = "testFailToDecode"
             let value: String
         }
-        let string: NIOLockedValueBox<String> = .init("")
+        let string: Mutex<String> = .init("")
         let expectation = TestExpectation()
 
         try await self.testJobQueue(numWorkers: 4, configuration: .init(queueName: #function)) { jobQueue in
             jobQueue.registerJob(parameters: TestStringParameter.self) { parameters, _ in
-                string.withLockedValue { $0 = parameters.value }
+                string.withLock { $0 = parameters.value }
                 expectation.trigger()
             }
             try await jobQueue.push(TestIntParameter(value: 2))
             try await jobQueue.push(TestStringParameter(value: "test"))
             try await expectation.wait()
         }
-        string.withLockedValue {
+        string.withLock {
             #expect($0 == "test")
         }
     }
@@ -337,8 +336,8 @@ struct RedisJobsTests {
             static let jobName = "testRerunAtStartup"
         }
         struct RetryError: Error {}
-        let firstTime = ManagedAtomic(true)
-        let finished = ManagedAtomic(false)
+        let firstTime = Atomic(true)
+        let finished = Atomic(false)
         let failedExpectation = TestExpectation()
         let succeededExpectation = TestExpectation()
         let job = JobDefinition(parameters: TestParameters.self) { _, _ in
@@ -480,7 +479,7 @@ struct RedisJobsTests {
             let value: Int
         }
         let expectation = TestExpectation()
-        let jobProcessed: NIOLockedValueBox<[Int]> = .init([])
+        let jobProcessed: Mutex<[Int]> = .init([])
         var logger = Logger(label: #function)
         logger.logLevel = .trace
         let redis = try createRedisConnectionPool(logger: logger)
@@ -493,7 +492,7 @@ struct RedisJobsTests {
             parameters: TestParameters.self,
             retryStrategy: .exponentialJitter(maxAttempts: 3, minJitter: 0.01, maxJitter: 0.25)
         ) { parameters, _ in
-            jobProcessed.withLockedValue {
+            jobProcessed.withLock {
                 $0.append(parameters.value)
             }
             expectation.trigger()
@@ -519,7 +518,7 @@ struct RedisJobsTests {
             try await expectation.wait()
             await serviceGroup.triggerGracefulShutdown()
         }
-        #expect(jobProcessed.withLockedValue { $0 } == [15])
+        #expect(jobProcessed.withLock { $0 } == [15])
     }
 
     @Test func testPausedThenResume() async throws {
@@ -528,7 +527,7 @@ struct RedisJobsTests {
             let value: Int
         }
         let expectation = TestExpectation()
-        let jobRunSequence: NIOLockedValueBox<[Int]> = .init([])
+        let jobRunSequence: Mutex<[Int]> = .init([])
         var logger = Logger(label: #function)
         logger.logLevel = .trace
         let redis = try createRedisConnectionPool(logger: logger)
@@ -542,7 +541,7 @@ struct RedisJobsTests {
             retryStrategy: .exponentialJitter(maxAttempts: 3, minJitter: 0.01, maxJitter: 0.25)
         ) { parameters, context in
             context.logger.info("Parameters=\(parameters)")
-            jobRunSequence.withLockedValue {
+            jobRunSequence.withLock {
                 $0.append(parameters.value)
             }
             expectation.trigger()
@@ -570,7 +569,7 @@ struct RedisJobsTests {
             try await expectation.wait(count: 1)
             await serviceGroup.triggerGracefulShutdown()
         }
-        #expect(jobRunSequence.withLockedValue { $0 } == [30, 15])
+        #expect(jobRunSequence.withLock { $0 } == [30, 15])
     }
 
     @Test func testCompletedJobRetention() async throws {
