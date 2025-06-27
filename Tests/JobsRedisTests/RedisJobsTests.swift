@@ -357,16 +357,17 @@ struct RedisJobsTests {
 
             // stall to give job chance for job to be pushed to failed queue
             try await Task.sleep(for: .milliseconds(50))
-
-            #expect(firstTime.load(ordering: .relaxed) == false)
-            #expect(finished.load(ordering: .relaxed) == false)
         }
+
+        #expect(firstTime.load(ordering: .relaxed) == false)
+        #expect(finished.load(ordering: .relaxed) == false)
 
         try await self.testJobQueue(numWorkers: 4, configuration: .init(queueName: #function), failedJobsInitialization: .rerun) { jobQueue in
             jobQueue.registerJob(job)
             try await succeededExpectation.wait()
-            #expect(finished.load(ordering: .relaxed) == true)
         }
+
+        #expect(finished.load(ordering: .relaxed) == true)
     }
 
     /// creates job that errors on first attempt, and is left on failed queue and
