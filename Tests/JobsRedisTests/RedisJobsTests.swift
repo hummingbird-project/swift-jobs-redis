@@ -12,27 +12,19 @@
 //
 //===----------------------------------------------------------------------===//
 
-import Atomics
 import Foundation
 import Jobs
 import Logging
-import NIOConcurrencyHelpers
 import NIOCore
 import NIOPosix
 @preconcurrency import RediStack
 import ServiceLifecycle
-import XCTest
+import Synchronization
+import Testing
 
 @testable import JobsRedis
 
-extension XCTestExpectation {
-    convenience init(description: String, expectedFulfillmentCount: Int) {
-        self.init(description: description)
-        self.expectedFulfillmentCount = expectedFulfillmentCount
-    }
-}
-
-final class RedisJobsTests: XCTestCase {
+struct RedisJobsTests {
     static let redisHostname = ProcessInfo.processInfo.environment["REDIS_HOSTNAME"] ?? "localhost"
 
     func createRedisConnectionPool(logger: Logger) throws -> RedisConnectionPool {
@@ -57,7 +49,7 @@ final class RedisJobsTests: XCTestCase {
         configuration: RedisJobQueue.Configuration = .init(),
         function: String = #function
     ) async throws -> JobQueue<RedisJobQueue> {
-        var logger = Logger(label: "RedisJobsTests")
+        var logger = Logger(label: function)
         logger.logLevel = .debug
         let redis = try createRedisConnectionPool(logger: logger)
         return try await JobQueue(
@@ -75,11 +67,12 @@ final class RedisJobsTests: XCTestCase {
     /// shutdown correctly
     @discardableResult public func testJobQueue<T>(
         numWorkers: Int,
-        configuration: RedisJobQueue.Configuration = .init(queueName: "MyJobQueue"),
+        configuration: RedisJobQueue.Configuration,
         failedJobsInitialization: RedisJobQueue.JobCleanup = .remove,
-        test: (JobQueue<RedisJobQueue>) async throws -> T
+        test: (JobQueue<RedisJobQueue>) async throws -> T,
+        function: String = #function
     ) async throws -> T {
-        let jobQueue = try await createJobQueue(numWorkers: numWorkers, configuration: configuration)
+        let jobQueue = try await createJobQueue(numWorkers: numWorkers, configuration: configuration, function: function)
         let redisService = RedisConnectionPoolService(jobQueue.queue.redisConnectionPool.wrappedValue)
         return try await withThrowingTaskGroup(of: Void.self) { group in
             let serviceGroup = ServiceGroup(
@@ -99,17 +92,17 @@ final class RedisJobsTests: XCTestCase {
         }
     }
 
-    func testBasic() async throws {
+    @Test func testBasic() async throws {
         struct TestParameters: JobParameters {
             static let jobName = "testBasic"
             let value: Int
         }
-        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 10)
-        try await self.testJobQueue(numWorkers: 1) { jobQueue in
+        let expectation = TestExpectation()
+        try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: #function)) { jobQueue in
             jobQueue.registerJob(parameters: TestParameters.self) { parameters, context in
                 context.logger.info("Parameters=\(parameters)")
                 try await Task.sleep(for: .milliseconds(Int.random(in: 10..<50)))
-                expectation.fulfill()
+                expectation.trigger()
             }
             try await jobQueue.push(TestParameters(value: 1))
             try await jobQueue.push(TestParameters(value: 2))
@@ -122,29 +115,29 @@ final class RedisJobsTests: XCTestCase {
             try await jobQueue.push(TestParameters(value: 9))
             try await jobQueue.push(TestParameters(value: 10))
 
-            await self.fulfillment(of: [expectation], timeout: 5)
+            try await expectation.wait(for: "TestJob.execute was called", count: 10)
         }
     }
 
-    func testMultipleWorkers() async throws {
+    @Test func testMultipleWorkers() async throws {
         struct TestParameters: JobParameters {
             static let jobName = "testMultipleWorkers"
             let value: Int
         }
-        let runningJobCounter = ManagedAtomic(0)
-        let maxRunningJobCounter = ManagedAtomic(0)
-        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 10)
+        let runningJobCounter = Atomic(0)
+        let maxRunningJobCounter = Atomic(0)
+        let expectation = TestExpectation()
 
-        try await self.testJobQueue(numWorkers: 4) { jobQueue in
+        try await self.testJobQueue(numWorkers: 4, configuration: .init(queueName: #function)) { jobQueue in
             jobQueue.registerJob(parameters: TestParameters.self) { parameters, context in
-                let runningJobs = runningJobCounter.wrappingIncrementThenLoad(by: 1, ordering: .relaxed)
+                let runningJobs = runningJobCounter.wrappingAdd(1, ordering: .relaxed).newValue
                 if runningJobs > maxRunningJobCounter.load(ordering: .relaxed) {
                     maxRunningJobCounter.store(runningJobs, ordering: .relaxed)
                 }
                 try await Task.sleep(for: .milliseconds(Int.random(in: 10..<50)))
                 context.logger.info("Parameters=\(parameters)")
-                expectation.fulfill()
-                runningJobCounter.wrappingDecrement(by: 1, ordering: .relaxed)
+                expectation.trigger()
+                runningJobCounter.wrappingSubtract(1, ordering: .relaxed)
             }
 
             try await jobQueue.push(TestParameters(value: 1))
@@ -158,159 +151,159 @@ final class RedisJobsTests: XCTestCase {
             try await jobQueue.push(TestParameters(value: 9))
             try await jobQueue.push(TestParameters(value: 10))
 
-            await self.fulfillment(of: [expectation], timeout: 5)
+            try await expectation.wait(count: 10)
 
-            XCTAssertGreaterThan(maxRunningJobCounter.load(ordering: .relaxed), 1)
-            XCTAssertLessThanOrEqual(maxRunningJobCounter.load(ordering: .relaxed), 4)
+            #expect(maxRunningJobCounter.load(ordering: .relaxed) > 1)
+            #expect(maxRunningJobCounter.load(ordering: .relaxed) <= 4)
         }
     }
 
-    func testErrorRetryCount() async throws {
+    @Test func testDelayedJob() async throws {
+        struct TestParameters: JobParameters {
+            static let jobName = "testDelayedJob"
+            let value: Int
+        }
+        let expectation = TestExpectation()
+        let jobExecutionSequence: Mutex<[Int]> = .init([])
+        try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: #function)) { jobQueue in
+            jobQueue.registerJob(parameters: TestParameters.self) { parameters, _ in
+                jobExecutionSequence.withLock {
+                    $0.append(parameters.value)
+                }
+                expectation.trigger()
+            }
+            try await jobQueue.push(
+                TestParameters(value: 100),
+                options: .init(delayUntil: Date.now.addingTimeInterval(2))
+            )
+            try await jobQueue.push(TestParameters(value: 50))
+            try await jobQueue.push(TestParameters(value: 10))
+
+            try await expectation.wait(for: "delayed job was called", count: 3)
+        }
+        jobExecutionSequence.withLock {
+            #expect($0 == [50, 10, 100])
+        }
+    }
+
+    @Test func testErrorRetryCount() async throws {
         struct TestParameters: JobParameters {
             static let jobName = "testErrorRetryCount"
         }
-        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 3)
+        let expectation = TestExpectation()
         struct FailedError: Error {}
-        try await self.testJobQueue(numWorkers: 1) { jobQueue in
+        try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: #function)) { jobQueue in
             jobQueue.registerJob(
                 parameters: TestParameters.self,
                 retryStrategy: .exponentialJitter(maxAttempts: 3, maxBackoff: .milliseconds(100))
             ) { _, _ in
-                expectation.fulfill()
+                expectation.trigger()
                 throw FailedError()
             }
             try await jobQueue.queue.cleanup(failedJobs: .remove)
             try await jobQueue.push(TestParameters())
 
-            await self.fulfillment(of: [expectation], timeout: 5)
+            try await expectation.wait(count: 3)
             try await Task.sleep(for: .milliseconds(200))
 
             let failedJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
                 of: jobQueue.queue.configuration.failedQueueKey,
                 withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
             ).get()
-            XCTAssertEqual(failedJobs, 1)
+            #expect(failedJobs == 1)
 
             let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.pendingQueueKey).get()
-            XCTAssertEqual(pendingJobs, 0)
+            #expect(pendingJobs == 0)
         }
     }
 
-    func testErrorRetryAndThenSucceed() async throws {
+    @Test func testErrorRetryAndThenSucceed() async throws {
         struct TestParameters: JobParameters {
             static let jobName = "testErrorRetryAndThenSucceed"
         }
-        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 2)
-        let currentJobTryCount: NIOLockedValueBox<Int> = .init(0)
+        let expectation = TestExpectation()
+        let currentJobTryCount: Mutex<Int> = .init(0)
         struct FailedError: Error {}
-        try await self.testJobQueue(numWorkers: 1) { jobQueue in
+        try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: #function)) { jobQueue in
             jobQueue.registerJob(
                 parameters: TestParameters.self,
                 retryStrategy: .exponentialJitter(maxAttempts: 3, maxBackoff: .milliseconds(100))
             ) { _, _ in
                 defer {
-                    currentJobTryCount.withLockedValue {
+                    currentJobTryCount.withLock {
                         $0 += 1
                     }
                 }
-                expectation.fulfill()
-                if currentJobTryCount.withLockedValue({ $0 }) == 0 {
+                expectation.trigger()
+                if currentJobTryCount.withLock({ $0 }) == 0 {
                     throw FailedError()
                 }
             }
             try await jobQueue.push(TestParameters())
 
-            await self.fulfillment(of: [expectation], timeout: 5)
+            try await expectation.wait(count: 2)
             try await Task.sleep(for: .milliseconds(200))
 
             let failedJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.failedQueueKey).get()
-            XCTAssertEqual(failedJobs, 0)
+            #expect(failedJobs == 0)
 
             let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.pendingQueueKey).get()
-            XCTAssertEqual(pendingJobs, 0)
+            #expect(pendingJobs == 0)
 
             let processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey)
                 .get()
-            XCTAssertEqual(processingJobs, 0)
+            #expect(processingJobs == 0)
         }
-        XCTAssertEqual(currentJobTryCount.withLockedValue { $0 }, 2)
+        #expect(currentJobTryCount.withLock { $0 } == 2)
     }
 
-    func testJobSerialization() async throws {
+    @Test func testJobSerialization() async throws {
         struct TestJobParameters: JobParameters {
             static let jobName = "testJobSerialization"
             let id: Int
             let message: String
         }
-        let expectation = XCTestExpectation(description: "TestJob.execute was called")
-        try await self.testJobQueue(numWorkers: 1) { jobQueue in
+        let expectation = TestExpectation()
+        try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: #function)) { jobQueue in
             jobQueue.registerJob(parameters: TestJobParameters.self) { parameters, _ in
-                XCTAssertEqual(parameters.id, 23)
-                XCTAssertEqual(parameters.message, "Hello!")
-                expectation.fulfill()
+                #expect(parameters.id == 23)
+                #expect(parameters.message == "Hello!")
+                expectation.trigger()
             }
             try await jobQueue.push(TestJobParameters(id: 23, message: "Hello!"))
 
-            await self.fulfillment(of: [expectation], timeout: 5)
-        }
-    }
-
-    func testDelayedJob() async throws {
-        struct TestParameters: JobParameters {
-            static let jobName = "testDelayedJob"
-            let value: Int
-        }
-        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 3)
-        let jobExecutionSequence: NIOLockedValueBox<[Int]> = .init([])
-        try await self.testJobQueue(numWorkers: 1) { jobQueue in
-            jobQueue.registerJob(parameters: TestParameters.self) { parameters, _ in
-                jobExecutionSequence.withLockedValue {
-                    $0.append(parameters.value)
-                }
-                expectation.fulfill()
-            }
-            try await jobQueue.push(
-                TestParameters(value: 100),
-                options: .init(delayUntil: Date.now.addingTimeInterval(1))
-            )
-            try await jobQueue.push(TestParameters(value: 50))
-            try await jobQueue.push(TestParameters(value: 10))
-
-            await self.fulfillment(of: [expectation], timeout: 5)
-        }
-        jobExecutionSequence.withLockedValue {
-            XCTAssertEqual($0, [50, 10, 100])
+            try await expectation.wait()
         }
     }
 
     /// Test job is cancelled on shutdown
-    func testShutdownJob() async throws {
+    @Test func testShutdownJob() async throws {
         struct TestParameters: JobParameters {
             static let jobName = "testShutdownJob"
         }
-        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 1)
-        var logger = Logger(label: "JobsTests")
+        let expectation = TestExpectation()
+        var logger = Logger(label: #function)
         logger.logLevel = .trace
 
-        try await self.testJobQueue(numWorkers: 4) { jobQueue in
+        try await self.testJobQueue(numWorkers: 4, configuration: .init(queueName: #function)) { jobQueue in
             jobQueue.registerJob(parameters: TestParameters.self) { _, _ in
-                expectation.fulfill()
+                expectation.trigger()
                 try await Task.sleep(for: .milliseconds(1000))
             }
             try await jobQueue.push(TestParameters())
-            await self.fulfillment(of: [expectation], timeout: 5)
+            try await expectation.wait()
 
             let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.pendingQueueKey).get()
-            XCTAssertEqual(pendingJobs, 0)
+            #expect(pendingJobs == 0)
             let failedJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.failedQueueKey).get()
             let processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey)
                 .get()
-            XCTAssertEqual(failedJobs + processingJobs, 1)
+            #expect(failedJobs + processingJobs == 1)
         }
     }
 
     /// test job fails to decode but queue continues to process
-    func testFailToDecode() async throws {
+    @Test func testFailToDecode() async throws {
         struct TestIntParameter: JobParameters {
             static let jobName = "testFailToDecode"
             let value: Int
@@ -319,116 +312,117 @@ final class RedisJobsTests: XCTestCase {
             static let jobName = "testFailToDecode"
             let value: String
         }
-        let string: NIOLockedValueBox<String> = .init("")
-        let expectation = XCTestExpectation(description: "job was called", expectedFulfillmentCount: 1)
+        let string: Mutex<String> = .init("")
+        let expectation = TestExpectation()
 
-        try await self.testJobQueue(numWorkers: 4) { jobQueue in
+        try await self.testJobQueue(numWorkers: 4, configuration: .init(queueName: #function)) { jobQueue in
             jobQueue.registerJob(parameters: TestStringParameter.self) { parameters, _ in
-                string.withLockedValue { $0 = parameters.value }
-                expectation.fulfill()
+                string.withLock { $0 = parameters.value }
+                expectation.trigger()
             }
             try await jobQueue.push(TestIntParameter(value: 2))
             try await jobQueue.push(TestStringParameter(value: "test"))
-            await self.fulfillment(of: [expectation], timeout: 5)
+            try await expectation.wait()
         }
-        string.withLockedValue {
-            XCTAssertEqual($0, "test")
+        string.withLock {
+            #expect($0 == "test")
         }
     }
 
     /// creates job that errors on first attempt, and is left on failed queue and
     /// is then rerun on startup of new server
-    func testRerunAtStartup() async throws {
+    @Test func testRerunAtStartup() async throws {
         struct TestParameters: JobParameters {
             static let jobName = "testRerunAtStartup"
         }
         struct RetryError: Error {}
-        let firstTime = ManagedAtomic(true)
-        let finished = ManagedAtomic(false)
-        let failedExpectation = XCTestExpectation(description: "TestJob failed", expectedFulfillmentCount: 1)
-        let succeededExpectation = XCTestExpectation(description: "TestJob2 succeeded", expectedFulfillmentCount: 1)
+        let firstTime = Atomic(true)
+        let finished = Atomic(false)
+        let failedExpectation = TestExpectation()
+        let succeededExpectation = TestExpectation()
         let job = JobDefinition(parameters: TestParameters.self) { _, _ in
             if firstTime.compareExchange(expected: true, desired: false, ordering: .relaxed).original {
-                failedExpectation.fulfill()
+                failedExpectation.trigger()
                 throw RetryError()
             }
-            succeededExpectation.fulfill()
+            succeededExpectation.trigger()
             finished.store(true, ordering: .relaxed)
         }
-        try await self.testJobQueue(numWorkers: 4) { jobQueue in
+        try await self.testJobQueue(numWorkers: 4, configuration: .init(queueName: #function)) { jobQueue in
             jobQueue.registerJob(job)
 
             try await jobQueue.push(TestParameters())
 
-            await self.fulfillment(of: [failedExpectation], timeout: 10)
+            try await failedExpectation.wait()
 
             // stall to give job chance for job to be pushed to failed queue
             try await Task.sleep(for: .milliseconds(50))
-
-            XCTAssertFalse(firstTime.load(ordering: .relaxed))
-            XCTAssertFalse(finished.load(ordering: .relaxed))
         }
 
-        try await self.testJobQueue(numWorkers: 4, failedJobsInitialization: .rerun) { jobQueue in
+        #expect(firstTime.load(ordering: .relaxed) == false)
+        #expect(finished.load(ordering: .relaxed) == false)
+
+        try await self.testJobQueue(numWorkers: 4, configuration: .init(queueName: #function), failedJobsInitialization: .rerun) { jobQueue in
             jobQueue.registerJob(job)
-            await self.fulfillment(of: [succeededExpectation], timeout: 10)
-            XCTAssertTrue(finished.load(ordering: .relaxed))
+            try await succeededExpectation.wait()
         }
+
+        #expect(finished.load(ordering: .relaxed) == true)
     }
 
     /// creates job that errors on first attempt, and is left on failed queue and
     /// is then removed on startup of new server
-    func testRemoveAtStartup() async throws {
+    @Test func testRemoveAtStartup() async throws {
         struct TestParameters: JobParameters {
             static let jobName = "testRemoveAtStartup"
         }
         struct RetryError: Error {}
-        let failedExpectation = XCTestExpectation(description: "TestJob failed", expectedFulfillmentCount: 1)
+        let failedExpectation = TestExpectation()
         let job = JobDefinition(parameters: TestParameters.self) { _, _ in
-            failedExpectation.fulfill()
+            failedExpectation.trigger()
             throw RetryError()
         }
-        try await self.testJobQueue(numWorkers: 4) { jobQueue in
+        try await self.testJobQueue(numWorkers: 4, configuration: .init(queueName: #function)) { jobQueue in
             jobQueue.registerJob(job)
 
             try await jobQueue.push(TestParameters())
 
-            await self.fulfillment(of: [failedExpectation], timeout: 10)
+            try await failedExpectation.wait()
 
             // stall to give job chance for job to be pushed to failed queue
             try await Task.sleep(for: .milliseconds(50))
         }
 
-        try await self.testJobQueue(numWorkers: 4, failedJobsInitialization: .remove) { jobQueue in
+        try await self.testJobQueue(numWorkers: 4, configuration: .init(queueName: #function), failedJobsInitialization: .remove) { jobQueue in
             jobQueue.registerJob(job)
         }
     }
 
-    func testMultipleJobQueueHandlers() async throws {
+    @Test func testMultipleJobQueueHandlers() async throws {
         struct TestParameters: JobParameters {
             static let jobName = "testMultipleJobQueueHandlers"
             let value: Int
         }
-        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 200)
+        let expectation = TestExpectation()
         let logger = {
-            var logger = Logger(label: "JobsTests")
+            var logger = Logger(label: #function)
             logger.logLevel = .debug
             return logger
         }()
         let job = JobDefinition(parameters: TestParameters.self) { parameters, context in
             context.logger.info("Parameters=\(parameters.value)")
             try await Task.sleep(for: .milliseconds(Int.random(in: 10..<50)))
-            expectation.fulfill()
+            expectation.trigger()
         }
         let redis = try createRedisConnectionPool(logger: logger)
         let redisService = RedisConnectionPoolService(redis)
         let jobQueue = try await JobQueue(
-            RedisJobQueue(redis, logger: logger),
+            RedisJobQueue(redis, configuration: .init(queueName: "testMultipleJobQueueHandlers"), logger: logger),
             logger: logger
         )
         jobQueue.registerJob(job)
         let jobQueue2 = try await JobQueue(
-            RedisJobQueue(redis, logger: logger),
+            RedisJobQueue(redis, configuration: .init(queueName: "testMultipleJobQueueHandlers2"), logger: logger),
             logger: logger
         )
         jobQueue2.registerJob(job)
@@ -452,57 +446,57 @@ final class RedisJobsTests: XCTestCase {
                 for i in 0..<200 {
                     try await jobQueue.push(TestParameters(value: i))
                 }
-                await self.fulfillment(of: [expectation], timeout: 5)
+                try await expectation.wait(count: 200)
                 await serviceGroup.triggerGracefulShutdown()
             } catch {
-                XCTFail("\(String(reflecting: error))")
+                Issue.record("\(String(reflecting: error))")
                 await serviceGroup.triggerGracefulShutdown()
                 throw error
             }
         }
     }
 
-    func testRebuildScripts() async throws {
+    @Test func testRebuildScripts() async throws {
         struct TestParameters: JobParameters {
             static let jobName = "testBasic"
             let value: Int
         }
-        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 1)
-        try await self.testJobQueue(numWorkers: 1) { jobQueue in
+        let expectation = TestExpectation()
+        try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: #function)) { jobQueue in
             jobQueue.registerJob(parameters: TestParameters.self) { parameters, context in
                 context.logger.info("Parameters=\(parameters)")
                 _ = try await jobQueue.queue.redisConnectionPool.wrappedValue.scriptFlush(.sync).get()
-                expectation.fulfill()
+                expectation.trigger()
             }
             try await jobQueue.push(TestParameters(value: 1))
 
-            await self.fulfillment(of: [expectation], timeout: 5)
+            try await expectation.wait()
         }
     }
 
-    func testCancelledJob() async throws {
+    @Test func testCancelledJob() async throws {
         struct TestParameters: JobParameters {
             static let jobName = "testCancelledJob"
             let value: Int
         }
-        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 1)
-        let jobProcessed: NIOLockedValueBox<[Int]> = .init([])
-        var logger = Logger(label: "JobsTests")
+        let expectation = TestExpectation()
+        let jobProcessed: Mutex<[Int]> = .init([])
+        var logger = Logger(label: #function)
         logger.logLevel = .trace
         let redis = try createRedisConnectionPool(logger: logger)
         let redisService = RedisConnectionPoolService(redis)
         let jobQueue = try await JobQueue(
-            .redis(redis, configuration: .init(queueName: "MyJobQueue", pollTime: .milliseconds(50)), logger: logger),
+            .redis(redis, configuration: .init(queueName: "testCancelledJob", pollTime: .milliseconds(50)), logger: logger),
             logger: logger
         )
         jobQueue.registerJob(
             parameters: TestParameters.self,
             retryStrategy: .exponentialJitter(maxAttempts: 3, minJitter: 0.01, maxJitter: 0.25)
         ) { parameters, _ in
-            jobProcessed.withLockedValue {
+            jobProcessed.withLock {
                 $0.append(parameters.value)
             }
-            expectation.fulfill()
+            expectation.trigger()
         }
         try await withThrowingTaskGroup(of: Void.self) { group in
             let serviceGroup = ServiceGroup(
@@ -522,25 +516,25 @@ final class RedisJobsTests: XCTestCase {
                 try await serviceGroup.run()
             }
 
-            await fulfillment(of: [expectation], timeout: 5)
+            try await expectation.wait()
             await serviceGroup.triggerGracefulShutdown()
         }
-        XCTAssertEqual(jobProcessed.withLockedValue { $0 }, [15])
+        #expect(jobProcessed.withLock { $0 } == [15])
     }
 
-    func testPausedThenResume() async throws {
+    @Test func testPausedThenResume() async throws {
         struct TestParameters: JobParameters {
             static let jobName = "testPausedAndThenResume"
             let value: Int
         }
-        let counter = Counter()
-        let jobRunSequence: NIOLockedValueBox<[Int]> = .init([])
-        var logger = Logger(label: "JobsTests")
+        let expectation = TestExpectation()
+        let jobRunSequence: Mutex<[Int]> = .init([])
+        var logger = Logger(label: #function)
         logger.logLevel = .trace
         let redis = try createRedisConnectionPool(logger: logger)
         let redisService = RedisConnectionPoolService(redis)
         let jobQueue = try await JobQueue(
-            .redis(redis, configuration: .init(queueName: "MyJobQueue", pollTime: .milliseconds(50)), logger: logger),
+            .redis(redis, configuration: .init(queueName: "testPausedThenResume", pollTime: .milliseconds(50)), logger: logger),
             logger: logger
         )
         jobQueue.registerJob(
@@ -548,10 +542,10 @@ final class RedisJobsTests: XCTestCase {
             retryStrategy: .exponentialJitter(maxAttempts: 3, minJitter: 0.01, maxJitter: 0.25)
         ) { parameters, context in
             context.logger.info("Parameters=\(parameters)")
-            jobRunSequence.withLockedValue {
+            jobRunSequence.withLock {
                 $0.append(parameters.value)
             }
-            counter.increment()
+            expectation.trigger()
         }
 
         try await withThrowingTaskGroup(of: Void.self) { group in
@@ -571,69 +565,43 @@ final class RedisJobsTests: XCTestCase {
             group.addTask {
                 try await serviceGroup.run()
             }
-            try await counter.waitFor(count: 1)
+            try await expectation.wait(count: 1)
             try await jobQueue.resumeJob(jobID: pausableJob)
-            try await counter.waitFor(count: 1)
+            try await expectation.wait(count: 1)
             await serviceGroup.triggerGracefulShutdown()
         }
-        XCTAssertEqual(jobRunSequence.withLockedValue { $0 }, [30, 15])
+        #expect(jobRunSequence.withLock { $0 } == [30, 15])
     }
 
-    func testMetadata() async throws {
-        let logger = Logger(label: "Jobs")
-        let redis = try createRedisConnectionPool(logger: logger)
-        let jobQueue = try await RedisJobQueue(redis, logger: logger)
-        let value = ByteBuffer(string: "Testing metadata")
-        try await jobQueue.setMetadata(key: "test", value: value)
-        let metadata = try await jobQueue.getMetadata("test")
-        XCTAssertEqual(metadata, value)
-        let value2 = ByteBuffer(string: "Testing metadata again")
-        try await jobQueue.setMetadata(key: "test", value: value2)
-        let metadata2 = try await jobQueue.getMetadata("test")
-        XCTAssertEqual(metadata2, value2)
-    }
-
-    func testMultipleQueueMetadata() async throws {
-        try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "queue1")) { jobQueue1 in
-            try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "queue2")) { jobQueue2 in
-                try await jobQueue1.queue.setMetadata(key: "test", value: .init(string: "queue1"))
-                try await jobQueue2.queue.setMetadata(key: "test", value: .init(string: "queue2"))
-                let value1 = try await jobQueue1.queue.getMetadata("test")
-                let value2 = try await jobQueue2.queue.getMetadata("test")
-                XCTAssertEqual(value1.map { String(buffer: $0) }, "queue1")
-                XCTAssertEqual(value2.map { String(buffer: $0) }, "queue2")
-            }
-        }
-    }
-
-    func testCompletedJobRetention() async throws {
+    @Test func testCompletedJobRetention() async throws {
         struct TestParameters: JobParameters {
             static let jobName = "testCompletedJobRetention"
             let value: Int
         }
-        let expectation = XCTestExpectation(description: "TestJob.execute was called", expectedFulfillmentCount: 3)
+        let expectation = TestExpectation()
         try await self.testJobQueue(
             numWorkers: 1,
             configuration: .init(
+                queueName: #function,
                 retentionPolicy: .init(completed: .retain)
             )
         ) { jobQueue in
             jobQueue.registerJob(parameters: TestParameters.self) { parameters, context in
                 context.logger.info("Parameters=\(parameters.value)")
-                expectation.fulfill()
+                expectation.trigger()
             }
             try await jobQueue.push(TestParameters(value: 1))
             try await jobQueue.push(TestParameters(value: 2))
             try await jobQueue.push(TestParameters(value: 3))
 
-            await fulfillment(of: [expectation], timeout: 10)
+            try await expectation.wait(count: 3)
             try await Task.sleep(for: .milliseconds(200))
 
             var completedJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
                 of: jobQueue.queue.configuration.completedQueueKey,
                 withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
             ).get()
-            XCTAssertEqual(completedJobsCount, 3)
+            #expect(completedJobsCount == 3)
 
             // Remove completed task more than 10 seconds old ie none
             try await jobQueue.queue.cleanup(completedJobs: .remove(maxAge: .seconds(10)))
@@ -642,7 +610,7 @@ final class RedisJobsTests: XCTestCase {
                 of: jobQueue.queue.configuration.completedQueueKey,
                 withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
             ).get()
-            XCTAssertEqual(completedJobsCount, 3)
+            #expect(completedJobsCount == 3)
 
             try await jobQueue.queue.cleanup(completedJobs: .remove(maxAge: .seconds(0)))
 
@@ -650,11 +618,11 @@ final class RedisJobsTests: XCTestCase {
                 of: jobQueue.queue.configuration.completedQueueKey,
                 withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
             ).get()
-            XCTAssertEqual(completedJobsCount, 0)
+            #expect(completedJobsCount == 0)
         }
     }
 
-    func testCancelledJobRetention() async throws {
+    @Test func testCancelledJobRetention() async throws {
         let jobQueue = try await self.createJobQueue(
             numWorkers: 1,
             configuration: .init(retentionPolicy: .init(cancelled: .retain))
@@ -679,7 +647,7 @@ final class RedisJobsTests: XCTestCase {
             of: jobQueue.queue.configuration.cancelledQueueKey,
             withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
         ).get()
-        XCTAssertEqual(cancelledJobsCount, 150)
+        #expect(cancelledJobsCount == 150)
 
         try await jobQueue.queue.cleanup(cancelledJobs: .remove(maxAge: .seconds(0)))
 
@@ -687,13 +655,13 @@ final class RedisJobsTests: XCTestCase {
             of: jobQueue.queue.configuration.cancelledQueueKey,
             withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
         ).get()
-        XCTAssertEqual(cancelledJobsCount, 0)
+        #expect(cancelledJobsCount == 0)
     }
 
-    func testCancelledJobRerun() async throws {
+    @Test func testCancelledJobRerun() async throws {
         let jobQueue = try await self.createJobQueue(
             numWorkers: 1,
-            configuration: .init(retentionPolicy: .init(cancelled: .retain))
+            configuration: .init(queueName: #function, retentionPolicy: .init(cancelled: .retain))
         )
         let jobName = JobName<Int>("testCancelledJobRetention")
         jobQueue.registerJob(name: jobName) { _, _ in }
@@ -715,12 +683,12 @@ final class RedisJobsTests: XCTestCase {
             of: jobQueue.queue.configuration.cancelledQueueKey,
             withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
         ).get()
-        XCTAssertEqual(cancelledJobsCount, 2)
+        #expect(cancelledJobsCount == 2)
         var pendingJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
             of: jobQueue.queue.configuration.pendingQueueKey,
             withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
         ).get()
-        XCTAssertEqual(pendingJobsCount, 0)
+        #expect(pendingJobsCount == 0)
 
         try await jobQueue.queue.cleanup(cancelledJobs: .rerun)
 
@@ -728,18 +696,18 @@ final class RedisJobsTests: XCTestCase {
             of: jobQueue.queue.configuration.cancelledQueueKey,
             withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
         ).get()
-        XCTAssertEqual(cancelledJobsCount, 0)
+        #expect(cancelledJobsCount == 0)
         pendingJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
             of: jobQueue.queue.configuration.pendingQueueKey,
             withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
         ).get()
-        XCTAssertEqual(pendingJobsCount, 2)
+        #expect(pendingJobsCount == 2)
     }
 
-    func testCleanupProcessingJobs() async throws {
+    @Test func testCleanupProcessingJobs() async throws {
         let jobQueue = try await self.createJobQueue(
             numWorkers: 1,
-            configuration: .init(retentionPolicy: .init(cancelled: .retain))
+            configuration: .init(queueName: #function, retentionPolicy: .init(cancelled: .retain))
         )
         let jobName = JobName<Int>("testCancelledJobRetention")
         jobQueue.registerJob(name: jobName) { _, _ in }
@@ -753,26 +721,26 @@ final class RedisJobsTests: XCTestCase {
         )
         let jobID = try await jobQueue.push(jobName, parameters: 1)
         let job = try await jobQueue.queue.popFirst()
-        XCTAssertEqual(jobID, job?.id)
+        #expect(jobID == job?.id)
         _ = try await jobQueue.push(jobName, parameters: 1)
         _ = try await jobQueue.queue.popFirst()
 
         var processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey).get()
-        XCTAssertEqual(processingJobs, 2)
+        #expect(processingJobs == 2)
 
         try await jobQueue.queue.cleanup(processingJobs: .remove)
 
         processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey).get()
-        XCTAssertEqual(processingJobs, 0)
+        #expect(processingJobs == 0)
 
         let exists = try await jobQueue.queue.redisConnectionPool.wrappedValue.exists(jobID.redisKey(for: jobQueue.queue)).get()
-        XCTAssertEqual(exists, 0)
+        #expect(exists == 0)
     }
 
-    func testRerunProcessingJobs() async throws {
+    @Test func testRerunProcessingJobs() async throws {
         let jobQueue = try await self.createJobQueue(
             numWorkers: 1,
-            configuration: .init(retentionPolicy: .init(cancelled: .retain))
+            configuration: .init(queueName: #function, retentionPolicy: .init(cancelled: .retain))
         )
         let jobName = JobName<Int>("testCancelledJobRetention")
         jobQueue.registerJob(name: jobName) { _, _ in }
@@ -786,38 +754,39 @@ final class RedisJobsTests: XCTestCase {
         )
         let jobID = try await jobQueue.push(jobName, parameters: 1)
         let job = try await jobQueue.queue.popFirst()
-        XCTAssertEqual(jobID, job?.id)
+        #expect(jobID == job?.id)
         _ = try await jobQueue.push(jobName, parameters: 1)
         _ = try await jobQueue.queue.popFirst()
 
         var processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey).get()
-        XCTAssertEqual(processingJobs, 2)
+        #expect(processingJobs == 2)
 
         try await jobQueue.queue.cleanup(processingJobs: .rerun)
 
         processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey).get()
-        XCTAssertEqual(processingJobs, 0)
+        #expect(processingJobs == 0)
         let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
             of: jobQueue.queue.configuration.pendingQueueKey,
             withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
         ).get()
-        XCTAssertEqual(pendingJobs, 2)
+        #expect(pendingJobs == 2)
 
         let exists = try await jobQueue.queue.redisConnectionPool.wrappedValue.exists(jobID.redisKey(for: jobQueue.queue)).get()
-        XCTAssertEqual(exists, 1)
+        #expect(exists == 1)
     }
 
-    func testCleanupJob() async throws {
+    @Test func testCleanupJob() async throws {
         try await self.testJobQueue(
             numWorkers: 1,
             configuration: .init(
+                queueName: "testCleanupJob",
                 retentionPolicy: .init(failed: .retain)
             )
         ) { jobQueue in
             try await self.testJobQueue(
                 numWorkers: 1,
                 configuration: .init(
-                    queueName: "SecondQueue",
+                    queueName: "testCleanupJob2",
                     retentionPolicy: .init(failed: .retain)
                 )
             ) { jobQueue2 in
@@ -851,7 +820,7 @@ final class RedisJobsTests: XCTestCase {
                     of: jobQueue.queue.configuration.failedQueueKey,
                     withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
                 ).get()
-                XCTAssertEqual(failedJobsCount, 3)
+                #expect(failedJobsCount == 3)
 
                 try await jobQueue.push(jobQueue.queue.cleanupJob, parameters: .init(failedJobs: .remove))
                 try await jobQueue.push(barrierJobName, parameters: .init())
@@ -862,47 +831,74 @@ final class RedisJobsTests: XCTestCase {
                     of: jobQueue.queue.configuration.failedQueueKey,
                     withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
                 ).get()
-                XCTAssertEqual(failedJobsCount, 0)
+                #expect(failedJobsCount == 0)
                 failedJobsCount = try await jobQueue2.queue.redisConnectionPool.wrappedValue.zcount(
                     of: jobQueue2.queue.configuration.failedQueueKey,
                     withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
                 ).get()
-                XCTAssertEqual(failedJobsCount, 1)
+                #expect(failedJobsCount == 1)
             }
         }
     }
 
-    func testMetadataLock() async throws {
-        try await self.testJobQueue(numWorkers: 1) { jobQueue in
+    @Test func testMetadata() async throws {
+        let logger = Logger(label: #function)
+        let redis = try createRedisConnectionPool(logger: logger)
+        let jobQueue = try await RedisJobQueue(redis, logger: logger)
+        let value = ByteBuffer(string: "Testing metadata")
+        try await jobQueue.setMetadata(key: "test", value: value)
+        let metadata = try await jobQueue.getMetadata("test")
+        #expect(metadata == value)
+        let value2 = ByteBuffer(string: "Testing metadata again")
+        try await jobQueue.setMetadata(key: "test", value: value2)
+        let metadata2 = try await jobQueue.getMetadata("test")
+        #expect(metadata2 == value2)
+    }
+
+    @Test func testMultipleQueueMetadata() async throws {
+        try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "testMultipleQueueMetadata")) { jobQueue1 in
+            try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "testMultipleQueueMetadata2")) { jobQueue2 in
+                try await jobQueue1.queue.setMetadata(key: "test", value: .init(string: "queue1"))
+                try await jobQueue2.queue.setMetadata(key: "test", value: .init(string: "queue2"))
+                let value1 = try await jobQueue1.queue.getMetadata("test")
+                let value2 = try await jobQueue2.queue.getMetadata("test")
+                #expect(value1.map { String(buffer: $0) } == "queue1")
+                #expect(value2.map { String(buffer: $0) } == "queue2")
+            }
+        }
+    }
+
+    @Test func testMetadataLock() async throws {
+        try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: #function)) { jobQueue in
             // 1 - acquire lock
             var result = try await jobQueue.queue.acquireLock(key: "lock", id: .init(string: "one"), expiresIn: 10)
-            XCTAssertTrue(result)
+            #expect(result == true)
             // 2 - check I can acquire lock once I already have the lock
             result = try await jobQueue.queue.acquireLock(key: "lock", id: .init(string: "one"), expiresIn: 10)
-            XCTAssertTrue(result)
+            #expect(result == true)
             // 3 - check I cannot acquire lock if a different identifer has it
             result = try await jobQueue.queue.acquireLock(key: "lock", id: .init(string: "two"), expiresIn: 10)
-            XCTAssertFalse(result)
+            #expect(result == false)
             // 4 - release lock with identifier that doesn own it
             try await jobQueue.queue.releaseLock(key: "lock", id: .init(string: "two"))
             // 5 - check I still cannot acquire lock
             result = try await jobQueue.queue.acquireLock(key: "lock", id: .init(string: "two"), expiresIn: 10)
-            XCTAssertFalse(result)
+            #expect(result == false)
             // 6 - release lock
             try await jobQueue.queue.releaseLock(key: "lock", id: .init(string: "one"))
             // 7 - check I can acquire lock after it has been released
             result = try await jobQueue.queue.acquireLock(key: "lock", id: .init(string: "two"), expiresIn: 1)
-            XCTAssertTrue(result)
+            #expect(result == true)
             // 8 - check I can acquire lock after it has expired
             try await Task.sleep(for: .seconds(1.5))
             result = try await jobQueue.queue.acquireLock(key: "lock", id: .init(string: "one"), expiresIn: 10)
-            XCTAssertTrue(result)
+            #expect(result == true)
             // 9 - release lock
             try await jobQueue.queue.releaseLock(key: "lock", id: .init(string: "one"))
         }
     }
 
-    func testMultipleQueueMetadataLock() async throws {
+    @Test func testMultipleQueueMetadataLock() async throws {
         try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "queue1")) { jobQueue1 in
             try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "queue2")) { jobQueue2 in
                 let result1 = try await jobQueue1.queue.acquireLock(
@@ -915,8 +911,8 @@ final class RedisJobsTests: XCTestCase {
                     id: .init(string: "queue2"),
                     expiresIn: 60
                 )
-                XCTAssert(result1)
-                XCTAssert(result2)
+                #expect(result1 == true)
+                #expect(result2 == true)
                 try await jobQueue1.queue.releaseLock(key: "testMultipleQueueMetadataLock", id: .init(string: "queue1"))
                 try await jobQueue2.queue.releaseLock(key: "testMultipleQueueMetadataLock", id: .init(string: "queue2"))
             }
@@ -938,35 +934,5 @@ struct RedisConnectionPoolService: Service {
         let promise = self.pool.eventLoop.makePromise(of: Void.self)
         self.pool.close(promise: promise)
         return try await promise.futureResult.get()
-    }
-}
-
-struct Counter {
-    let stream: AsyncStream<Void>
-    let continuation: AsyncStream<Void>.Continuation
-
-    init() {
-        (self.stream, self.continuation) = AsyncStream.makeStream(of: Void.self)
-    }
-
-    func increment() {
-        self.continuation.yield()
-    }
-
-    func waitFor(count: Int, timeout: Duration = .seconds(5)) async throws {
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                var iterator = stream.makeAsyncIterator()
-                for _ in 0..<count {
-                    _ = await iterator.next()
-                }
-
-            }
-            group.addTask {
-                try await Task.sleep(for: timeout)
-            }
-            try await group.next()
-            group.cancelAll()
-        }
     }
 }
