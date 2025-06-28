@@ -10,7 +10,7 @@ extension RedisClient {
     ///   - keys: Keys accessed by script
     ///   - arguments: Arguments of script
     /// - Returns: The message sent with the command.
-    public func evalSHA(_ scriptSHA1: String, keys: [RedisKey], arguments: [RESPValue]) -> EventLoopFuture<RESPValue> {
+    func evalSHA(_ scriptSHA1: String, keys: [RedisKey], arguments: [RESPValue]) -> EventLoopFuture<RESPValue> {
         var args: [RESPValue] = [.init(from: scriptSHA1)]
         args.append(.init(from: keys.count))
         args.append(contentsOf: keys.map { .init(from: $0) })
@@ -30,7 +30,7 @@ extension RedisClient {
     /// - Parameters
     ///   - sha1: SHA1 of script to check for
     /// - Returns: The message sent with the command.
-    public func scriptExists(_ sha1: String) -> EventLoopFuture<Int> {
+    func scriptExists(_ sha1: String) -> EventLoopFuture<Int> {
         let args: [RESPValue] = [.init(from: "EXISTS"), .init(from: sha1)]
         return send(command: "SCRIPT", with: args).tryConverting()
     }
@@ -44,7 +44,7 @@ extension RedisClient {
     /// - Parameters
     ///   - flush: Flush scripts synchronously or asynchronously
     /// - Returns: The message sent with the command.
-    public func scriptFlush(_ flush: RedisScriptFlush?) -> EventLoopFuture<RESPValue> {
+    func scriptFlush(_ flush: RedisScriptFlush?) -> EventLoopFuture<RESPValue> {
         let args: [RESPValue] = flush.map { [.init(from: "FLUSH"), .init(from: $0.rawValue)] } ?? [.init(from: "FLUSH")]
         return send(command: "SCRIPT", with: args)
     }
@@ -57,7 +57,7 @@ extension RedisClient {
     /// - Parameters
     ///   - script: Script to load
     /// - Returns: The SHA1 of script.
-    public func scriptLoad(_ script: String) -> EventLoopFuture<String> {
+    func scriptLoad(_ script: String) -> EventLoopFuture<String> {
         let args: [RESPValue] = [.init(from: "LOAD"), .init(from: script)]
         return send(command: "SCRIPT", with: args).tryConverting()
     }
@@ -87,7 +87,7 @@ extension EventLoopFuture where Value == RESPValue {
 }
 
 /// Script flush mode
-public enum RedisScriptFlush: String {
+enum RedisScriptFlush: String {
     case async = "ASYNC"
     case sync = "SYNC"
 }
