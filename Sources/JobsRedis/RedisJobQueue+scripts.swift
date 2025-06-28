@@ -115,11 +115,11 @@ extension RedisJobQueue {
             pop: .init(
                 """
                 local values = redis.call("ZPOPMIN", KEYS[1])
-                if values[2] == nil then 
+                if #(values) == 0 then 
                     return nil
                 end
-                if values[2] > ARGV[1] then
-                    redis.call("ZADD", KEYS[1], 0, values[1])
+                if tonumber(values[2]) > tonumber(ARGV[1]) then
+                    redis.call("ZADD", KEYS[1], values[2], values[1])
                     return nil
                 end
                 redis.call("LPUSH", KEYS[2], values[1])

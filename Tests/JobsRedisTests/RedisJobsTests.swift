@@ -186,6 +186,25 @@ struct RedisJobsTests {
         }
     }
 
+    @Test func testDelayedJobDoesntRun() async throws {
+        struct TestParameters: JobParameters {
+            static let jobName = "testDelayedJobDoesntRun"
+        }
+        let jobQueue = try await self.createJobQueue(
+            numWorkers: 1,
+            configuration: .init(queueName: #function, retentionPolicy: .init(cancelled: .retain))
+        )
+        try await jobQueue.queue.cleanup(failedJobs: .remove, processingJobs: .remove, pendingJobs: .remove)
+        try await jobQueue.push(
+            TestParameters(),
+            options: .init(delayUntil: Date.now.addingTimeInterval(5))
+        )
+        let job = try await jobQueue.queue.popFirst()
+        #expect(job == nil)
+        let job2 = try await jobQueue.queue.popFirst()
+        #expect(job2 == nil)
+    }
+
     @Test func testErrorRetryCount() async throws {
         struct TestParameters: JobParameters {
             static let jobName = "testErrorRetryCount"
