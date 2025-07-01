@@ -164,7 +164,7 @@ public final class RedisJobQueue: JobQueueDriver {
     ///   - jobID: Job id
     @inlinable
     public func finished(jobID: JobID) async throws {
-        if self.configuration.retentionPolicy.completed == .retain {
+        if self.configuration.retentionPolicy.completedJobs == .retain {
             _ = try await self.scripts.completedAndRetain.runScript(
                 on: self.redisConnectionPool.wrappedValue,
                 keys: [self.configuration.processingQueueKey, self.configuration.completedQueueKey],
@@ -186,7 +186,7 @@ public final class RedisJobQueue: JobQueueDriver {
     ///   - jobID: Job id
     @inlinable
     public func failed(jobID: JobID, error: Error) async throws {
-        if self.configuration.retentionPolicy.failed == .retain {
+        if self.configuration.retentionPolicy.failedJobs == .retain {
             _ = try await self.scripts.moveToFailed.runScript(
                 on: self.redisConnectionPool.wrappedValue,
                 keys: [self.configuration.processingQueueKey, self.configuration.failedQueueKey],
@@ -334,7 +334,7 @@ extension RedisJobQueue: CancellableJobQueue {
     ///  - jobID: Job id
     @inlinable
     public func cancel(jobID: JobID) async throws {
-        if self.configuration.retentionPolicy.cancelled == .retain {
+        if self.configuration.retentionPolicy.cancelledJobs == .retain {
             _ = try await self.scripts.cancelAndRetain.runScript(
                 on: self.redisConnectionPool.wrappedValue,
                 keys: [self.configuration.pendingQueueKey, self.configuration.cancelledQueueKey],

@@ -35,21 +35,21 @@ extension RedisJobQueue {
             public static var doNotRetain: RetainData { RetainData(rawValue: .doNotRetain) }
         }
 
-        /// Jobs with status cancelled
-        public var cancelled: RetainData
         /// Jobs with status completed
-        public var completed: RetainData
+        public var completedJobs: RetainData
         /// Jobs with status failed
-        public var failed: RetainData
+        public var failedJobs: RetainData
+        /// Jobs with status cancelled
+        public var cancelledJobs: RetainData
 
         public init(
-            cancelled: RetainData = .doNotRetain,
-            completed: RetainData = .doNotRetain,
-            failed: RetainData = .retain
+            completedJobs: RetainData = .doNotRetain,
+            failedJobs: RetainData = .retain,
+            cancelledJobs: RetainData = .doNotRetain
         ) {
-            self.cancelled = cancelled
-            self.completed = completed
-            self.failed = failed
+            self.completedJobs = completedJobs
+            self.failedJobs = failedJobs
+            self.cancelledJobs = cancelledJobs
         }
     }
 }

@@ -23,17 +23,22 @@ import Foundation
 
 /// Parameters for Cleanup job
 public struct RedisJobCleanupParameters: Sendable & Codable {
-    let failedJobs: RedisJobQueue.JobCleanup
     let completedJobs: RedisJobQueue.JobCleanup
+    let failedJobs: RedisJobQueue.JobCleanup
     let cancelledJobs: RedisJobQueue.JobCleanup
 
+    ///  Initialize RedisJobCleanupParameters
+    /// - Parameters:
+    ///   - completedJobs:
+    ///   - failedJobs:
+    ///   - cancelledJobs:
     public init(
-        failedJobs: RedisJobQueue.JobCleanup = .doNothing,
         completedJobs: RedisJobQueue.JobCleanup = .doNothing,
+        failedJobs: RedisJobQueue.JobCleanup = .doNothing,
         cancelledJobs: RedisJobQueue.JobCleanup = .doNothing
     ) {
-        self.failedJobs = failedJobs
         self.completedJobs = completedJobs
+        self.failedJobs = failedJobs
         self.cancelledJobs = cancelledJobs
     }
 }
@@ -94,11 +99,11 @@ extension RedisJobQueue {
         self.registerJob(
             JobDefinition(name: cleanupJob, parameters: RedisJobCleanupParameters.self, retryStrategy: .dontRetry) { parameters, context in
                 try await self.cleanup(
-                    failedJobs: parameters.failedJobs,
-                    processingJobs: .doNothing,
                     pendingJobs: .doNothing,
-                    cancelledJobs: parameters.cancelledJobs,
-                    completedJobs: parameters.completedJobs
+                    processingJobs: .doNothing,
+                    completedJobs: parameters.completedJobs,
+                    failedJobs: parameters.failedJobs,
+                    cancelledJobs: parameters.cancelledJobs
                 )
             }
         )
@@ -118,18 +123,18 @@ extension RedisJobQueue {
     /// the job queue.
     ///
     /// - Parameters:
-    ///   - failedJobs: What to do with jobs tagged as failed
-    ///   - processingJobs: What to do with jobs tagged as processing
     ///   - pendingJobs: What to do with jobs tagged as pending
-    ///   - cancelledJobs: What to do with jobs tagged as cancelled
+    ///   - processingJobs: What to do with jobs tagged as processing
     ///   - completedJobs: What to do with jobs tagged as completed
+    ///   - failedJobs: What to do with jobs tagged as failed
+    ///   - cancelledJobs: What to do with jobs tagged as cancelled
     /// - Throws:
     public func cleanup(
-        failedJobs: JobCleanup = .doNothing,
-        processingJobs: ProcessingJobCleanup = .doNothing,
         pendingJobs: PendingJobCleanup = .doNothing,
-        cancelledJobs: JobCleanup = .doNothing,
-        completedJobs: JobCleanup = .doNothing
+        processingJobs: ProcessingJobCleanup = .doNothing,
+        completedJobs: JobCleanup = .doNothing,
+        failedJobs: JobCleanup = .doNothing,
+        cancelledJobs: JobCleanup = .doNothing
     ) async throws {
         try await self.cleanupPendingQueue(queueKey: self.configuration.pendingQueueKey, cleanup: pendingJobs)
         // there shouldn't be any on the processing list, but if there are we should do something with them

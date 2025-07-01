@@ -85,7 +85,7 @@ struct RedisJobsTests {
             group.addTask {
                 try await serviceGroup.run()
             }
-            try await jobQueue.queue.cleanup(failedJobs: failedJobsInitialization, processingJobs: .remove, pendingJobs: .remove)
+            try await jobQueue.queue.cleanup(pendingJobs: .remove, processingJobs: .remove, failedJobs: failedJobsInitialization)
             let value = try await test(jobQueue)
             await serviceGroup.triggerGracefulShutdown()
             return value
@@ -192,9 +192,9 @@ struct RedisJobsTests {
         }
         let jobQueue = try await self.createJobQueue(
             numWorkers: 1,
-            configuration: .init(queueName: #function, retentionPolicy: .init(cancelled: .retain))
+            configuration: .init(queueName: #function, retentionPolicy: .init(cancelledJobs: .retain))
         )
-        try await jobQueue.queue.cleanup(failedJobs: .remove, processingJobs: .remove, pendingJobs: .remove)
+        try await jobQueue.queue.cleanup(pendingJobs: .remove, processingJobs: .remove, failedJobs: .remove)
         try await jobQueue.push(
             TestParameters(),
             options: .init(delayUntil: Date.now.addingTimeInterval(5))
@@ -525,7 +525,7 @@ struct RedisJobsTests {
                     logger: Logger(label: "JobQueueService")
                 )
             )
-            try await jobQueue.queue.cleanup(failedJobs: .remove, processingJobs: .remove, pendingJobs: .remove)
+            try await jobQueue.queue.cleanup(pendingJobs: .remove, processingJobs: .remove, failedJobs: .remove)
 
             let cancellable = try await jobQueue.push(TestParameters(value: 30))
             try await jobQueue.push(TestParameters(value: 15))
@@ -575,7 +575,7 @@ struct RedisJobsTests {
                     logger: Logger(label: "JobQueueService")
                 )
             )
-            try await jobQueue.queue.cleanup(failedJobs: .remove, processingJobs: .remove, pendingJobs: .remove)
+            try await jobQueue.queue.cleanup(pendingJobs: .remove, processingJobs: .remove, failedJobs: .remove)
 
             let pausableJob = try await jobQueue.push(TestParameters(value: 15))
             try await jobQueue.push(TestParameters(value: 30))
@@ -602,7 +602,7 @@ struct RedisJobsTests {
             numWorkers: 1,
             configuration: .init(
                 queueName: #function,
-                retentionPolicy: .init(completed: .retain)
+                retentionPolicy: .init(completedJobs: .retain)
             )
         ) { jobQueue in
             jobQueue.registerJob(parameters: TestParameters.self) { parameters, context in
@@ -644,17 +644,17 @@ struct RedisJobsTests {
     @Test func testCancelledJobRetention() async throws {
         let jobQueue = try await self.createJobQueue(
             numWorkers: 1,
-            configuration: .init(retentionPolicy: .init(cancelled: .retain))
+            configuration: .init(retentionPolicy: .init(cancelledJobs: .retain))
         )
         let jobName = JobName<Int>("testCancelledJobRetention")
         jobQueue.registerJob(name: jobName) { _, _ in }
 
         try await jobQueue.queue.cleanup(
-            failedJobs: .remove,
-            processingJobs: .remove,
             pendingJobs: .remove,
-            cancelledJobs: .remove,
-            completedJobs: .remove
+            processingJobs: .remove,
+            completedJobs: .remove,
+            failedJobs: .remove,
+            cancelledJobs: .remove
         )
 
         for _ in 0..<150 {
@@ -680,17 +680,17 @@ struct RedisJobsTests {
     @Test func testCancelledJobRerun() async throws {
         let jobQueue = try await self.createJobQueue(
             numWorkers: 1,
-            configuration: .init(queueName: #function, retentionPolicy: .init(cancelled: .retain))
+            configuration: .init(queueName: #function, retentionPolicy: .init(cancelledJobs: .retain))
         )
         let jobName = JobName<Int>("testCancelledJobRetention")
         jobQueue.registerJob(name: jobName) { _, _ in }
 
         try await jobQueue.queue.cleanup(
-            failedJobs: .remove,
-            processingJobs: .remove,
             pendingJobs: .remove,
-            cancelledJobs: .remove,
-            completedJobs: .remove
+            processingJobs: .remove,
+            completedJobs: .remove,
+            failedJobs: .remove,
+            cancelledJobs: .remove
         )
         let jobId = try await jobQueue.push(jobName, parameters: 1)
         let jobId2 = try await jobQueue.push(jobName, parameters: 2)
@@ -726,17 +726,17 @@ struct RedisJobsTests {
     @Test func testCleanupProcessingJobs() async throws {
         let jobQueue = try await self.createJobQueue(
             numWorkers: 1,
-            configuration: .init(queueName: #function, retentionPolicy: .init(cancelled: .retain))
+            configuration: .init(queueName: #function, retentionPolicy: .init(cancelledJobs: .retain))
         )
         let jobName = JobName<Int>("testCancelledJobRetention")
         jobQueue.registerJob(name: jobName) { _, _ in }
 
         try await jobQueue.queue.cleanup(
-            failedJobs: .remove,
-            processingJobs: .remove,
             pendingJobs: .remove,
-            cancelledJobs: .remove,
-            completedJobs: .remove
+            processingJobs: .remove,
+            completedJobs: .remove,
+            failedJobs: .remove,
+            cancelledJobs: .remove
         )
         let jobID = try await jobQueue.push(jobName, parameters: 1)
         let job = try await jobQueue.queue.popFirst()
@@ -759,17 +759,17 @@ struct RedisJobsTests {
     @Test func testRerunProcessingJobs() async throws {
         let jobQueue = try await self.createJobQueue(
             numWorkers: 1,
-            configuration: .init(queueName: #function, retentionPolicy: .init(cancelled: .retain))
+            configuration: .init(queueName: #function, retentionPolicy: .init(cancelledJobs: .retain))
         )
         let jobName = JobName<Int>("testCancelledJobRetention")
         jobQueue.registerJob(name: jobName) { _, _ in }
 
         try await jobQueue.queue.cleanup(
-            failedJobs: .remove,
-            processingJobs: .remove,
             pendingJobs: .remove,
-            cancelledJobs: .remove,
-            completedJobs: .remove
+            processingJobs: .remove,
+            completedJobs: .remove,
+            failedJobs: .remove,
+            cancelledJobs: .remove
         )
         let jobID = try await jobQueue.push(jobName, parameters: 1)
         let job = try await jobQueue.queue.popFirst()
@@ -799,14 +799,14 @@ struct RedisJobsTests {
             numWorkers: 1,
             configuration: .init(
                 queueName: "testCleanupJob",
-                retentionPolicy: .init(failed: .retain)
+                retentionPolicy: .init(failedJobs: .retain)
             )
         ) { jobQueue in
             try await self.testJobQueue(
                 numWorkers: 1,
                 configuration: .init(
                     queueName: "testCleanupJob2",
-                    retentionPolicy: .init(failed: .retain)
+                    retentionPolicy: .init(failedJobs: .retain)
                 )
             ) { jobQueue2 in
                 let (stream, cont) = AsyncStream.makeStream(of: Void.self)
