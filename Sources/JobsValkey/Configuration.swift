@@ -16,21 +16,21 @@ import NIOCore
 import Valkey
 
 extension ValkeyJobQueue {
-    /// Redis Job queue configuration
+    /// Valkey Job queue configuration
     public struct Configuration: Sendable {
         /// queue name
         public let queueName: String
-        /// Pending queue redis key
+        /// Pending queue Valkey key
         public let pendingQueueKey: ValkeyKey
-        /// Processing queue redis key
+        /// Processing queue Valkey key
         public let processingQueueKey: ValkeyKey
-        /// Paused queue redis key
+        /// Paused queue Valkey key
         public let pausedQueueKey: ValkeyKey
-        /// Failed queue redis key
+        /// Failed queue Valkey key
         public let failedQueueKey: ValkeyKey
-        /// Cancelled queue redis key
+        /// Cancelled queue Valkey key
         public let cancelledQueueKey: ValkeyKey
-        /// Completed queue redis key
+        /// Completed queue Valkey key
         public let completedQueueKey: ValkeyKey
         /// Prefix for metadata
         public let metadataKeyPrefix: String

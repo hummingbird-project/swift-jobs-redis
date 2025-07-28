@@ -54,7 +54,7 @@ struct ValkeyScripts: Sendable {
 }
 
 extension ValkeyJobQueue {
-    /// Upload scripts used by swift-job-redis
+    /// Upload scripts used by swift-job-valkey
     static func uploadScripts(valkeyClient: ValkeyClient, logger: Logger) async throws -> ValkeyScripts {
         let scripts = try ValkeyScripts(
             pop: .init(

@@ -91,7 +91,7 @@ extension ValkeyJobQueue {
     /// Use this with the ``/Jobs/JobSchedule`` to schedule a cleanup of
     /// failed, cancelled or completed jobs
     public var cleanupJob: JobName<ValkeyJobCleanupParameters> {
-        .init("_Jobs_RedisCleanup_\(self.configuration.queueName)")
+        .init("_Jobs_ValkeyCleanup_\(self.configuration.queueName)")
     }
 
     /// register clean up job on queue

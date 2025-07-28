@@ -24,7 +24,7 @@ import FoundationEssentials
 import Foundation
 #endif
 
-/// Redis implementation of job queue driver
+/// Valkey implementation of job queue driver
 public final class ValkeyJobQueue: JobQueueDriver {
     public struct JobID: Sendable, CustomStringConvertible, Equatable, RESPStringRenderable, RESPTokenDecodable {
         let value: String
@@ -103,11 +103,11 @@ public final class ValkeyJobQueue: JobQueueDriver {
     @usableFromInline
     let logger: Logger
 
-    /// Initialize redis job queue
+    /// Initialize Valkey job queue
     /// - Parameters:
     ///   - valkeyClient: Valkey client
     ///   - configuration: configuration
-    ///   - logger: Logger used by RedisJobQueue
+    ///   - logger: Logger used by ValkeyJobQueue
     public init(_ valkeyClient: ValkeyClient, configuration: Configuration = .init(), logger: Logger) async throws {
         self.valkeyClient = valkeyClient
         self.configuration = configuration
@@ -310,7 +310,7 @@ extension ValkeyJobQueue: JobMetadataDriver {
     }
 }
 
-/// extend RedisJobQueue to conform to AsyncSequence
+/// extend ValkeyJobQueue to conform to AsyncSequence
 extension ValkeyJobQueue {
     public typealias Element = JobQueueResult<JobID>
     public struct AsyncIterator: AsyncIteratorProtocol {
@@ -391,11 +391,11 @@ extension ValkeyJobQueue: ResumableJobQueue {
 }
 
 extension JobQueueDriver where Self == ValkeyJobQueue {
-    /// Return Redis driver for Job Queue
+    /// Return Valkey driver for Job Queue
     /// - Parameters:
     ///   - valkeyClient: Valkey client
     ///   - configuration: configuration
-    ///   - logger: Logger used by RedisJobQueue
+    ///   - logger: Logger used by ValkeyJobQueue
     public static func valkey(
         _ valkeyClient: ValkeyClient,
         configuration: ValkeyJobQueue.Configuration = .init(),
