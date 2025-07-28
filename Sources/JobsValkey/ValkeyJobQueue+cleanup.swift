@@ -13,7 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 import Jobs
-@preconcurrency import RediStack
+import Valkey
 
 #if canImport(FoundationEssentials)
 import FoundationEssentials
@@ -22,20 +22,20 @@ import Foundation
 #endif
 
 /// Parameters for Cleanup job
-public struct RedisJobCleanupParameters: Sendable & Codable {
-    let completedJobs: RedisJobQueue.JobCleanup
-    let failedJobs: RedisJobQueue.JobCleanup
-    let cancelledJobs: RedisJobQueue.JobCleanup
+public struct ValkeyJobCleanupParameters: Sendable & Codable {
+    let completedJobs: ValkeyJobQueue.JobCleanup
+    let failedJobs: ValkeyJobQueue.JobCleanup
+    let cancelledJobs: ValkeyJobQueue.JobCleanup
 
-    ///  Initialize RedisJobCleanupParameters
+    ///  Initialize ValkeyJobCleanupParameters
     /// - Parameters:
-    ///   - completedJobs:
-    ///   - failedJobs:
-    ///   - cancelledJobs:
+    ///   - completedJobs: What to do with completed jobs
+    ///   - failedJobs: What to do with failed jobs
+    ///   - cancelledJobs: What to do with cancelled jobs
     public init(
-        completedJobs: RedisJobQueue.JobCleanup = .doNothing,
-        failedJobs: RedisJobQueue.JobCleanup = .doNothing,
-        cancelledJobs: RedisJobQueue.JobCleanup = .doNothing
+        completedJobs: ValkeyJobQueue.JobCleanup = .doNothing,
+        failedJobs: ValkeyJobQueue.JobCleanup = .doNothing,
+        cancelledJobs: ValkeyJobQueue.JobCleanup = .doNothing
     ) {
         self.completedJobs = completedJobs
         self.failedJobs = failedJobs
@@ -43,7 +43,7 @@ public struct RedisJobCleanupParameters: Sendable & Codable {
     }
 }
 
-extension RedisJobQueue {
+extension ValkeyJobQueue {
     /// how to cleanup a job
     public struct JobCleanup: Sendable, Codable {
         enum RawValue: Codable {
@@ -90,14 +90,14 @@ extension RedisJobQueue {
     ///
     /// Use this with the ``/Jobs/JobSchedule`` to schedule a cleanup of
     /// failed, cancelled or completed jobs
-    public var cleanupJob: JobName<RedisJobCleanupParameters> {
+    public var cleanupJob: JobName<ValkeyJobCleanupParameters> {
         .init("_Jobs_RedisCleanup_\(self.configuration.queueName)")
     }
 
     /// register clean up job on queue
     func registerCleanupJob() {
         self.registerJob(
-            JobDefinition(name: cleanupJob, parameters: RedisJobCleanupParameters.self, retryStrategy: .dontRetry) { parameters, context in
+            JobDefinition(name: cleanupJob, parameters: ValkeyJobCleanupParameters.self, retryStrategy: .dontRetry) { parameters, context in
                 try await self.cleanup(
                     pendingJobs: .doNothing,
                     processingJobs: .doNothing,
@@ -145,11 +145,13 @@ extension RedisJobQueue {
     }
 
     /// What to do with set at initialization
-    func cleanupSet(key: RedisKey, cleanup: ProcessingJobCleanup) async throws {
+    func cleanupSet(key: ValkeyKey, cleanup: ProcessingJobCleanup) async throws {
         switch cleanup.rawValue {
         case .remove:
+            self.logger.debug("Remove set", metadata: ["key": .stringConvertible(key)])
             try await self.removeSet(key: key)
         case .rerun:
+            self.logger.debug("Rerun set", metadata: ["key": .stringConvertible(key)])
             try await self.rerunSet(key: key)
         case .doNothing:
             break
@@ -157,11 +159,13 @@ extension RedisJobQueue {
     }
 
     /// What to do with set at initialization
-    func cleanupSortedSet(key: RedisKey, cleanup: JobCleanup) async throws {
+    func cleanupSortedSet(key: ValkeyKey, cleanup: JobCleanup) async throws {
         switch cleanup.rawValue {
         case .remove(let maxAge):
+            self.logger.debug("Remove queue", metadata: ["key": .stringConvertible(key)])
             try await self.removeSortedSet(key: key, maxAge: maxAge)
         case .rerun:
+            self.logger.debug("Rerun queue", metadata: ["key": .stringConvertible(key)])
             try await self.rerunSortedSet(key: key)
         case .doNothing:
             break
@@ -169,9 +173,10 @@ extension RedisJobQueue {
     }
 
     /// What to do with the pending queue at initialization
-    func cleanupPendingQueue(queueKey: RedisKey, cleanup: PendingJobCleanup) async throws {
+    func cleanupPendingQueue(queueKey: ValkeyKey, cleanup: PendingJobCleanup) async throws {
         switch cleanup.rawValue {
         case .remove(let maxAge):
+            self.logger.debug("Remove pending queue", metadata: ["key": .stringConvertible(queueKey)])
             try await self.removeSortedSet(key: queueKey, maxAge: maxAge)
         case .doNothing:
             break
@@ -179,40 +184,39 @@ extension RedisJobQueue {
     }
 
     /// Push all the entries from list back onto the main list.
-    func rerunSet(key: RedisKey) async throws {
+    func rerunSet(key: ValkeyKey) async throws {
         _ = try await self.scripts.rerunQueue.runScript(
-            on: self.redisConnectionPool.wrappedValue,
+            on: self.valkeyClient,
             keys: [key, self.configuration.pendingQueueKey],
             arguments: []
         )
     }
 
     /// Delete all entries from queue
-    func removeSet(key: RedisKey) async throws {
+    func removeSet(key: ValkeyKey) async throws {
         // Cannot use a script for this as it edits keys that are not input keys
         while true {
-            let response = try await self.redisConnectionPool.wrappedValue.rpop(from: key, count: 100).get()
-            if response.isNull {
+            guard let response = try await self.valkeyClient.rpop(key, count: 100) else {
                 break
             }
-            guard let jobIDs = [JobID](fromRESP: response) else {
-                throw RedisQueueError.unexpectedRedisKeyType
+            guard let jobIDs = try? [JobID](fromRESP: response) else {
+                throw ValkeyQueueError.unexpectedValkeyKeyType
             }
             try await self.delete(jobIDs: jobIDs)
         }
     }
 
     /// Push all the entries from sorted set back onto the pending sorted set.
-    func rerunSortedSet(key: RedisKey) async throws {
+    func rerunSortedSet(key: ValkeyKey) async throws {
         _ = try await self.scripts.rerunSortedSet.runScript(
-            on: self.redisConnectionPool.wrappedValue,
+            on: self.valkeyClient,
             keys: [key, self.configuration.pendingQueueKey],
             arguments: []
         )
     }
 
     /// Delete all entries from queue older than specified date
-    func removeSortedSet(key: RedisKey, maxAge: Duration?) async throws {
+    func removeSortedSet(key: ValkeyKey, maxAge: Duration?) async throws {
         let date: Date =
             if let maxAge {
                 .now - Double(maxAge.components.seconds)
@@ -222,20 +226,19 @@ extension RedisJobQueue {
         // Get number of keys we should pop
         while true {
             // get count of keys older than date
-            let count = try await self.redisConnectionPool.wrappedValue.zcount(of: key, withMaximumScoreOf: .inclusive(date.timeIntervalSince1970))
-                .get()
+            let count = try await self.valkeyClient.zcount(key, min: -Double.infinity, max: date.timeIntervalSince1970)
             guard count > 0 else {
                 break
             }
             // Pop a maximum of 100 keys at one time
             let chunk = Swift.min(count, 100)
-            let values = try await self.redisConnectionPool.wrappedValue._zpopmin(count: chunk, from: key).get()
+            let values = try await self.valkeyClient.zpopmin(key, count: chunk)
             guard values.first != nil else {
                 break
             }
             var index = 0
             while index < values.count {
-                guard values[index].1 <= date.timeIntervalSince1970 else {
+                guard values[index].score <= date.timeIntervalSince1970 else {
                     break
                 }
                 index += 1
@@ -244,18 +247,12 @@ extension RedisJobQueue {
                 // if we broke out of the loop before reaching the end we found a value which shouldnt be
                 // deleted. Delete everything up until that point and add the remaining values back into the
                 // sorted set
-                let jobIDs = values[..<index].compactMap { JobID(fromRESP: $0.0) }
-                guard jobIDs.count == values.count else {
-                    throw RedisQueueError.unexpectedRedisKeyType
-                }
+                let jobIDs = values[..<index].map { JobID(buffer: $0.value) }
                 try await self.delete(jobIDs: jobIDs)
-                _ = try await self.redisConnectionPool.wrappedValue.zadd(values[index...].map { (element: $0.0, score: $0.1) }, to: key).get()
+                _ = try await self.valkeyClient.zadd(key, data: values[index...].map { .init(score: $0.score, member: $0.value) })
             } else {
                 // delete all jobIDs returned by zpopmin
-                let jobIDs = values.compactMap { JobID(fromRESP: $0.0) }
-                guard jobIDs.count == values.count else {
-                    throw RedisQueueError.unexpectedRedisKeyType
-                }
+                let jobIDs = values.map { JobID(buffer: $0.value) }
                 try await self.delete(jobIDs: jobIDs)
             }
         }

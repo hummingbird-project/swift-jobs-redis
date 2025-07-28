@@ -15,8 +15,8 @@
 import Jobs
 import Logging
 import NIOCore
-@preconcurrency import RediStack
 import Synchronization
+import Valkey
 
 #if canImport(FoundationEssentials)
 import FoundationEssentials
@@ -25,8 +25,8 @@ import Foundation
 #endif
 
 /// Redis implementation of job queue driver
-public final class RedisJobQueue: JobQueueDriver {
-    public struct JobID: Sendable, CustomStringConvertible, Equatable, RESPValueConvertible {
+public final class ValkeyJobQueue: JobQueueDriver {
+    public struct JobID: Sendable, CustomStringConvertible, Equatable, RESPRenderable, RESPTokenDecodable {
         let value: String
 
         @usableFromInline
@@ -38,17 +38,22 @@ public final class RedisJobQueue: JobQueueDriver {
             self.value = value
         }
 
-        public init?(fromRESP value: RediStack.RESPValue) {
-            guard let string = String(fromRESP: value) else { return nil }
-            self.value = string
+        init(buffer: ByteBuffer) {
+            self.value = String(buffer: buffer)
         }
 
-        public func convertedToRESPValue() -> RediStack.RESPValue {
-            self.value.convertedToRESPValue()
+        public init(fromRESP token: RESPToken) throws {
+            self.value = try String(fromRESP: token)
+        }
+
+        public var respEntries: Int { 1 }
+
+        public func encode(into commandEncoder: inout ValkeyCommandEncoder) {
+            self.value.encode(into: &commandEncoder)
         }
 
         @usableFromInline
-        func redisKey(for queue: RedisJobQueue) -> RedisKey { .init("\(queue.configuration.queueName)/\(self.description)") }
+        func valkeyKey(for queue: ValkeyJobQueue) -> ValkeyKey { .init("\(queue.configuration.queueName)/\(self.description)") }
 
         /// String description of Identifier
         public var description: String {
@@ -73,14 +78,14 @@ public final class RedisJobQueue: JobQueueDriver {
         }
     }
 
-    public enum RedisQueueError: Error, CustomStringConvertible {
-        case unexpectedRedisKeyType
+    public enum ValkeyQueueError: Error, CustomStringConvertible {
+        case unexpectedValkeyKeyType
         case jobMissing(JobID)
 
         public var description: String {
             switch self {
-            case .unexpectedRedisKeyType:
-                return "Unexpected redis key type"
+            case .unexpectedValkeyKeyType:
+                return "Unexpected Valkey key type"
             case .jobMissing(let value):
                 return "Job associated with \(value) is missing"
             }
@@ -88,25 +93,28 @@ public final class RedisJobQueue: JobQueueDriver {
     }
 
     @usableFromInline
-    let redisConnectionPool: UnsafeTransfer<RedisConnectionPool>
+    let valkeyClient: ValkeyClient
     @usableFromInline
     let configuration: Configuration
     @usableFromInline
     let isStopped: Atomic<Bool>
     @usableFromInline
-    let scripts: RedisScripts
+    let scripts: ValkeyScripts
+    @usableFromInline
+    let logger: Logger
 
     /// Initialize redis job queue
     /// - Parameters:
-    ///   - redisConnectionPool: Redis connection pool
+    ///   - valkeyClient: Valkey client
     ///   - configuration: configuration
     ///   - logger: Logger used by RedisJobQueue
-    public init(_ redisConnectionPool: RedisConnectionPool, configuration: Configuration = .init(), logger: Logger) async throws {
-        self.redisConnectionPool = .init(redisConnectionPool)
+    public init(_ valkeyClient: ValkeyClient, configuration: Configuration = .init(), logger: Logger) async throws {
+        self.valkeyClient = valkeyClient
         self.configuration = configuration
         self.isStopped = .init(false)
         self.jobRegistry = .init()
-        self.scripts = try await Self.uploadScripts(redisConnectionPool: redisConnectionPool, logger: logger)
+        self.logger = logger
+        self.scripts = try await Self.uploadScripts(valkeyClient: valkeyClient, logger: logger)
         self.registerCleanupJob()
     }
 
@@ -147,12 +155,12 @@ public final class RedisJobQueue: JobQueueDriver {
     func push<Parameters>(jobID: JobID, jobRequest: JobRequest<Parameters>, options: JobOptions) async throws {
         let buffer = try self.jobRegistry.encode(jobRequest: jobRequest)
         _ = try await self.scripts.addToQueue.runScript(
-            on: self.redisConnectionPool.wrappedValue,
-            keys: [jobID.redisKey(for: self), self.configuration.pendingQueueKey],
+            on: self.valkeyClient,
+            keys: [jobID.valkeyKey(for: self), self.configuration.pendingQueueKey],
             arguments: [
-                .init(from: buffer),
-                .init(from: jobID.description),
-                .init(from: options.delayUntil?.timeIntervalSince1970 ?? Date.now.timeIntervalSince1970),
+                String(buffer: buffer),
+                jobID.description,
+                "\(options.delayUntil?.timeIntervalSince1970 ?? Date.now.timeIntervalSince1970)",
             ]
         )
     }
@@ -166,15 +174,15 @@ public final class RedisJobQueue: JobQueueDriver {
     public func finished(jobID: JobID) async throws {
         if self.configuration.retentionPolicy.completedJobs == .retain {
             _ = try await self.scripts.completedAndRetain.runScript(
-                on: self.redisConnectionPool.wrappedValue,
+                on: self.valkeyClient,
                 keys: [self.configuration.processingQueueKey, self.configuration.completedQueueKey],
-                arguments: [.init(from: jobID.description), .init(from: Date.now.timeIntervalSince1970)]
+                arguments: [jobID.description, "\(Date.now.timeIntervalSince1970)"]
             )
         } else {
             _ = try await self.scripts.completed.runScript(
-                on: self.redisConnectionPool.wrappedValue,
-                keys: [self.configuration.processingQueueKey, jobID.redisKey(for: self)],
-                arguments: [.init(from: jobID.description)]
+                on: self.valkeyClient,
+                keys: [self.configuration.processingQueueKey, jobID.valkeyKey(for: self)],
+                arguments: [jobID.description]
             )
         }
     }
@@ -188,15 +196,15 @@ public final class RedisJobQueue: JobQueueDriver {
     public func failed(jobID: JobID, error: Error) async throws {
         if self.configuration.retentionPolicy.failedJobs == .retain {
             _ = try await self.scripts.moveToFailed.runScript(
-                on: self.redisConnectionPool.wrappedValue,
+                on: self.valkeyClient,
                 keys: [self.configuration.processingQueueKey, self.configuration.failedQueueKey],
-                arguments: [.init(from: jobID.description), .init(from: Date.now.timeIntervalSince1970)]
+                arguments: [jobID.description, "\(Date.now.timeIntervalSince1970)"]
             )
         } else {
             _ = try await self.scripts.failedAndDelete.runScript(
-                on: self.redisConnectionPool.wrappedValue,
-                keys: [self.configuration.processingQueueKey, jobID.redisKey(for: self)],
-                arguments: [.init(from: jobID.description)]
+                on: self.valkeyClient,
+                keys: [self.configuration.processingQueueKey, jobID.valkeyKey(for: self)],
+                arguments: [jobID.description]
             )
 
         }
@@ -214,11 +222,11 @@ public final class RedisJobQueue: JobQueueDriver {
     @usableFromInline
     func popFirst() async throws -> JobQueueResult<JobID>? {
         let value = try await self.scripts.pop.runScript(
-            on: self.redisConnectionPool.wrappedValue,
+            on: self.valkeyClient,
             keys: [self.configuration.pendingQueueKey, self.configuration.processingQueueKey],
-            arguments: [.init(from: Date.now.timeIntervalSince1970)]
+            arguments: ["\(Date.now.timeIntervalSince1970)"]
         )
-        guard let jobID = JobID(fromRESP: value) else {
+        guard let jobID = try? value.decode(as: JobID.self) else {
             return nil
         }
 
@@ -235,24 +243,24 @@ public final class RedisJobQueue: JobQueueDriver {
     }
 
     func get(jobID: JobID) async throws -> ByteBuffer? {
-        try await self.redisConnectionPool.wrappedValue.get(jobID.redisKey(for: self)).get().byteBuffer
+        try await self.valkeyClient.get(jobID.valkeyKey(for: self))
     }
 
     func delete(jobIDs: [JobID]) async throws {
-        _ = try await self.redisConnectionPool.wrappedValue.delete(jobIDs.map { $0.redisKey(for: self) }).get()
+        _ = try await self.valkeyClient.del(keys: jobIDs.map { $0.valkeyKey(for: self) })
     }
 
     let jobRegistry: JobRegistry
 }
 
-extension RedisJobQueue: JobMetadataDriver {
+extension ValkeyJobQueue: JobMetadataDriver {
     /// Get job queue metadata
     /// - Parameter key: Metadata key
     /// - Returns: Associated ByteBuffer
     @inlinable
     public func getMetadata(_ key: String) async throws -> ByteBuffer? {
         let key = "\(self.configuration.metadataKeyPrefix)\(key)"
-        return try await self.redisConnectionPool.wrappedValue.get(.init(key)).get().byteBuffer
+        return try await self.valkeyClient.get(.init(key))
     }
 
     /// Set job queue metadata
@@ -262,7 +270,7 @@ extension RedisJobQueue: JobMetadataDriver {
     @inlinable
     public func setMetadata(key: String, value: ByteBuffer) async throws {
         let key = "\(self.configuration.metadataKeyPrefix)\(key)"
-        try await self.redisConnectionPool.wrappedValue.set(.init(key), to: value).get()
+        try await self.valkeyClient.set(.init(key), value: value)
     }
 
     /// Acquire metadata lock
@@ -276,11 +284,15 @@ extension RedisJobQueue: JobMetadataDriver {
     public func acquireLock(key: String, id: ByteBuffer, expiresIn: TimeInterval) async throws -> Bool {
         let key = "\(self.configuration.metadataKeyPrefix)\(key)"
         let response = try await self.scripts.acquireLock.runScript(
-            on: self.redisConnectionPool.wrappedValue,
+            on: self.valkeyClient,
             keys: [.init(key)],
-            arguments: [.init(from: id), .init(from: Int(Date.now.timeIntervalSince1970 + expiresIn))]
+            arguments: [String(buffer: id), "\(Int(Date.now.timeIntervalSince1970 + expiresIn))"]
         )
-        return !response.isNull
+        if case .null = response.value {
+            return false
+        } else {
+            return true
+        }
     }
 
     /// Release metadata lock
@@ -292,19 +304,19 @@ extension RedisJobQueue: JobMetadataDriver {
     public func releaseLock(key: String, id: ByteBuffer) async throws {
         let key = "\(self.configuration.metadataKeyPrefix)\(key)"
         _ = try await self.scripts.releaseLock.runScript(
-            on: self.redisConnectionPool.wrappedValue,
+            on: self.valkeyClient,
             keys: [.init(key)],
-            arguments: [.init(from: id)]
+            arguments: [String(buffer: id)]
         )
     }
 }
 
 /// extend RedisJobQueue to conform to AsyncSequence
-extension RedisJobQueue {
+extension ValkeyJobQueue {
     public typealias Element = JobQueueResult<JobID>
     public struct AsyncIterator: AsyncIteratorProtocol {
         @usableFromInline
-        let queue: RedisJobQueue
+        let queue: ValkeyJobQueue
 
         @inlinable
         public func next() async throws -> Element? {
@@ -326,7 +338,7 @@ extension RedisJobQueue {
     }
 }
 
-extension RedisJobQueue: CancellableJobQueue {
+extension ValkeyJobQueue: CancellableJobQueue {
     /// Cancels a job
     ///
     /// Removes it from the pending queue
@@ -336,21 +348,21 @@ extension RedisJobQueue: CancellableJobQueue {
     public func cancel(jobID: JobID) async throws {
         if self.configuration.retentionPolicy.cancelledJobs == .retain {
             _ = try await self.scripts.cancelAndRetain.runScript(
-                on: self.redisConnectionPool.wrappedValue,
+                on: self.valkeyClient,
                 keys: [self.configuration.pendingQueueKey, self.configuration.cancelledQueueKey],
-                arguments: [.init(from: jobID.description), .init(from: Date.now.timeIntervalSince1970)]
+                arguments: [jobID.description, "\(Date.now.timeIntervalSince1970)"]
             )
         } else {
             _ = try await self.scripts.cancel.runScript(
-                on: self.redisConnectionPool.wrappedValue,
-                keys: [self.configuration.pendingQueueKey, jobID.redisKey(for: self)],
-                arguments: [.init(from: jobID.description)]
+                on: self.valkeyClient,
+                keys: [self.configuration.pendingQueueKey, jobID.valkeyKey(for: self)],
+                arguments: [jobID.description]
             )
         }
     }
 }
 
-extension RedisJobQueue: ResumableJobQueue {
+extension ValkeyJobQueue: ResumableJobQueue {
     /// Temporarily remove job from pending queue
     ///
     /// Removes it from the pending queue, adds to paused queue
@@ -359,9 +371,9 @@ extension RedisJobQueue: ResumableJobQueue {
     @inlinable
     public func pause(jobID: JobID) async throws {
         _ = try await self.scripts.pauseResume.runScript(
-            on: self.redisConnectionPool.wrappedValue,
+            on: self.valkeyClient,
             keys: [self.configuration.pendingQueueKey, self.configuration.pausedQueueKey],
-            arguments: [.init(from: jobID.description)]
+            arguments: [jobID.description]
         )
     }
 
@@ -373,82 +385,24 @@ extension RedisJobQueue: ResumableJobQueue {
     @inlinable
     public func resume(jobID: JobID) async throws {
         _ = try await self.scripts.pauseResume.runScript(
-            on: self.redisConnectionPool.wrappedValue,
+            on: self.valkeyClient,
             keys: [self.configuration.pausedQueueKey, self.configuration.pendingQueueKey],
-            arguments: [.init(from: jobID.description)]
+            arguments: [jobID.description]
         )
     }
 }
 
-extension JobQueueDriver where Self == RedisJobQueue {
+extension JobQueueDriver where Self == ValkeyJobQueue {
     /// Return Redis driver for Job Queue
     /// - Parameters:
-    ///   - redisConnectionPool: Redis connection pool
+    ///   - valkeyClient: Valkey client
     ///   - configuration: configuration
     ///   - logger: Logger used by RedisJobQueue
-    public static func redis(
-        _ redisConnectionPool: RedisConnectionPool,
-        configuration: RedisJobQueue.Configuration = .init(),
+    public static func valkey(
+        _ valkeyClient: ValkeyClient,
+        configuration: ValkeyJobQueue.Configuration = .init(),
         logger: Logger
     ) async throws -> Self {
-        try await .init(redisConnectionPool, configuration: configuration, logger: logger)
-    }
-}
-
-// Extend ByteBuffer so that is conforms to `RESPValueConvertible`. Really not sure why
-// this isnt available already
-#if compiler(>=6.0)
-extension ByteBuffer: @retroactive RESPValueConvertible {}
-#else
-extension ByteBuffer: RESPValueConvertible {}
-#endif
-extension ByteBuffer {
-    public init?(fromRESP value: RESPValue) {
-        guard let buffer = value.byteBuffer else { return nil }
-        self = buffer
-    }
-
-    public func convertedToRESPValue() -> RESPValue {
-        .bulkString(self)
-    }
-}
-
-extension RedisClient {
-    /// The version of zpopmin in RediStack does not work, so until a fix is merged I have
-    /// implemented a version of it here
-    func _zpopmin(
-        count: Int,
-        from key: RedisKey
-    ) -> EventLoopFuture<[(RESPValue, Double)]> {
-        let args: [RESPValue] = [
-            .init(from: key),
-            .init(from: count),
-        ]
-        return self.send(command: "ZPOPMIN", with: args).flatMapThrowing { value in
-            guard let values = [RESPValue](fromRESP: value) else { throw RedisClientError.failedRESPConversion(to: [RESPValue].self) }
-            var index = 0
-            var result: [(RESPValue, Double)] = .init()
-            while index < values.count - 1 {
-                guard let score = Double(fromRESP: values[index + 1]) else {
-                    throw RedisClientError.assertionFailure(message: "Unexpected response: '\(values[index + 1])'")
-                }
-                let value = values[index]
-                result.append((value, score))
-                index += 2
-            }
-            return result
-        }
-    }
-
-    /// Removes and returns the last elements of the list stored at key.
-    ///
-    /// See [https://redis.io/commands/rpop](https://redis.io/commands/rpop)
-    /// - Parameters
-    ///    - key: The key of the list to pop from.
-    ///    - count: Number of elements to pop
-    /// - Returns: The elements that were popped from the list, else `.null`.
-    func rpop(from key: RedisKey, count: Int) -> EventLoopFuture<RESPValue> {
-        let args = [RESPValue(from: key), RESPValue(from: count)]
-        return send(command: "RPOP", with: args)
+        try await .init(valkeyClient, configuration: configuration, logger: logger)
     }
 }

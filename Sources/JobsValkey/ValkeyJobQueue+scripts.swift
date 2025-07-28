@@ -13,72 +13,73 @@
 //===----------------------------------------------------------------------===//
 
 import Logging
-@preconcurrency import RediStack
+import NIOCore
+import Valkey
 
 @usableFromInline
-struct RedisScripts: Sendable {
+struct ValkeyScripts: Sendable {
     @usableFromInline
-    struct RedisScript: Sendable {
+    final class ValkeyScript: @unchecked Sendable {
         let script: String
-        let sha1: String
+        var sha1: ByteBuffer
 
-        init(_ script: String, redisConnectionPool: RedisConnectionPool) async throws {
+        init(_ script: String, valkeyClient: some ValkeyClientProtocol) throws {
             self.script = script
-            self.sha1 = try await redisConnectionPool.scriptLoad(script).get()
+            self.sha1 = .init()  //try await valkeyClient.scriptLoad(script: script)
         }
 
         @usableFromInline
         func runScript(
-            on redisConnectionPool: RedisConnectionPool,
-            keys: [RedisKey],
-            arguments: [RESPValue] = []
-        ) async throws -> RESPValue {
+            on valkeyClient: ValkeyClient,
+            keys: [ValkeyKey],
+            arguments: [String] = []
+        ) async throws -> RESPToken {
             do {
-                return try await redisConnectionPool.evalSHA(sha1, keys: keys, arguments: arguments).get()
-            } catch let error as RedisError where error.message.hasPrefix("(Redis) NOSCRIPT") {
-                _ = try await redisConnectionPool.scriptLoad(script).get()
-                return try await runScript(on: redisConnectionPool, keys: keys, arguments: arguments)
+                return try await valkeyClient.evalsha(sha1: self.sha1, keys: keys, args: arguments)
+            } catch let error as ValkeyClientError where error.message?.hasPrefix("NOSCRIPT") == true {
+                self.sha1 = try await valkeyClient.scriptLoad(script: self.script)
+                return try await runScript(on: valkeyClient, keys: keys, arguments: arguments)
             }
         }
     }
 
-    let addToQueue: RedisScript
-    let moveToProcessing: RedisScript
+    let addToQueue: ValkeyScript
+    let moveToProcessing: ValkeyScript
     @usableFromInline
-    let failedAndDelete: RedisScript
+    let failedAndDelete: ValkeyScript
     @usableFromInline
-    let moveToFailed: RedisScript
-    let moveToPending: RedisScript
-    let pop: RedisScript
+    let moveToFailed: ValkeyScript
+    let moveToPending: ValkeyScript
+    let pop: ValkeyScript
     @usableFromInline
-    let completed: RedisScript
+    let completed: ValkeyScript
     @usableFromInline
-    let completedAndRetain: RedisScript
+    let completedAndRetain: ValkeyScript
     @usableFromInline
-    let cancel: RedisScript
+    let cancel: ValkeyScript
     @usableFromInline
-    let cancelAndRetain: RedisScript
+    let cancelAndRetain: ValkeyScript
     @usableFromInline
-    let pauseResume: RedisScript
-    let rerunQueue: RedisScript
-    let rerunSortedSet: RedisScript
+    let pauseResume: ValkeyScript
+    let rerunQueue: ValkeyScript
+    let rerunSortedSet: ValkeyScript
     @usableFromInline
-    let acquireLock: RedisScript
+    let acquireLock: ValkeyScript
     @usableFromInline
-    let releaseLock: RedisScript
+    let releaseLock: ValkeyScript
 }
 
-extension RedisJobQueue {
+extension ValkeyJobQueue {
     /// Upload scripts used by swift-job-redis
-    static func uploadScripts(redisConnectionPool: RedisConnectionPool, logger: Logger) async throws -> RedisScripts {
-        let scripts = try await RedisScripts(
+    static func uploadScripts(valkeyClient: ValkeyClient, logger: Logger) async throws -> ValkeyScripts {
+        let scripts = try ValkeyScripts(
             addToQueue: .init(
                 """
                 redis.call("SET", KEYS[1], ARGV[1])
                 redis.call("ZADD", KEYS[2], ARGV[3], ARGV[2])
                 return redis.status_reply('OK')
                 """,
-                redisConnectionPool: redisConnectionPool
+                valkeyClient: valkeyClient
             ),
             moveToProcessing: .init(
                 """
@@ -86,7 +87,7 @@ extension RedisJobQueue {
                 redis.call("LPUSH", KEYS[2], ARGV[1])
                 return redis.status_reply('OK')
                 """,
-                redisConnectionPool: redisConnectionPool
+                valkeyClient: valkeyClient
             ),
             failedAndDelete: .init(
                 """
@@ -94,7 +95,7 @@ extension RedisJobQueue {
                 redis.call("DEL", KEYS[2])
                 return redis.status_reply('OK')
                 """,
-                redisConnectionPool: redisConnectionPool
+                valkeyClient: valkeyClient
             ),
             moveToFailed: .init(
                 """
@@ -102,7 +103,7 @@ extension RedisJobQueue {
                 redis.call("ZADD", KEYS[2], ARGV[2], ARGV[1])
                 return redis.status_reply('OK')
                 """,
-                redisConnectionPool: redisConnectionPool
+                valkeyClient: valkeyClient
             ),
             moveToPending: .init(
                 """
@@ -110,7 +111,7 @@ extension RedisJobQueue {
                 redis.call("ZADD", KEYS[2], 0, ARGV[2])
                 return redis.status_reply('OK')
                 """,
-                redisConnectionPool: redisConnectionPool
+                valkeyClient: valkeyClient
             ),
             pop: .init(
                 """
@@ -125,7 +126,7 @@ extension RedisJobQueue {
                 redis.call("LPUSH", KEYS[2], values[1])
                 return values[1]
                 """,
-                redisConnectionPool: redisConnectionPool
+                valkeyClient: valkeyClient
             ),
             completed: .init(
                 """
@@ -133,7 +134,7 @@ extension RedisJobQueue {
                 redis.call("DEL", KEYS[2])
                 return redis.status_reply('OK')
                 """,
-                redisConnectionPool: redisConnectionPool
+                valkeyClient: valkeyClient
             ),
             completedAndRetain: .init(
                 """
@@ -141,7 +142,7 @@ extension RedisJobQueue {
                 redis.call("ZADD", KEYS[2], ARGV[2], ARGV[1])
                 return redis.status_reply('OK')
                 """,
-                redisConnectionPool: redisConnectionPool
+                valkeyClient: valkeyClient
             ),
             cancel: .init(
                 """
@@ -150,7 +151,7 @@ extension RedisJobQueue {
                 end
                 return redis.status_reply('OK')
                 """,
-                redisConnectionPool: redisConnectionPool
+                valkeyClient: valkeyClient
             ),
             cancelAndRetain: .init(
                 """
@@ -159,7 +160,7 @@ extension RedisJobQueue {
                 end
                 return redis.status_reply('OK')
                 """,
-                redisConnectionPool: redisConnectionPool
+                valkeyClient: valkeyClient
             ),
             pauseResume: .init(
                 """
@@ -171,7 +172,7 @@ extension RedisJobQueue {
                 redis.call("ZADD", KEYS[2], score, ARGV[1])
                 return redis.status_reply('OK')
                 """,
-                redisConnectionPool: redisConnectionPool
+                valkeyClient: valkeyClient
             ),
             rerunQueue: .init(
                 """
@@ -184,7 +185,7 @@ extension RedisJobQueue {
                 end
                 return redis.status_reply('OK')
                 """,
-                redisConnectionPool: redisConnectionPool
+                valkeyClient: valkeyClient
             ),
             rerunSortedSet: .init(
                 """
@@ -192,7 +193,7 @@ extension RedisJobQueue {
                 redis.call("DEL", KEYS[1])
                 return redis.status_reply('OK')
                 """,
-                redisConnectionPool: redisConnectionPool
+                valkeyClient: valkeyClient
             ),
             acquireLock: .init(
                 """
@@ -203,7 +204,7 @@ extension RedisJobQueue {
                     return redis.call("SET", KEYS[1], ARGV[1], "NX", "EXAT", ARGV[2])
                 end
                 """,
-                redisConnectionPool: redisConnectionPool
+                valkeyClient: valkeyClient
             ),
             releaseLock: .init(
                 """
@@ -213,7 +214,7 @@ extension RedisJobQueue {
                     return 0
                 end
                 """,
-                redisConnectionPool: redisConnectionPool
+                valkeyClient: valkeyClient
             )
         )
         logger.debug("AddToQueue script with SHA1 \(scripts.addToQueue.sha1)")

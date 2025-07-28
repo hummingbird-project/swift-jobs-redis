@@ -13,25 +13,25 @@
 //===----------------------------------------------------------------------===//
 
 import NIOCore
-@preconcurrency import RediStack
+import Valkey
 
-extension RedisJobQueue {
+extension ValkeyJobQueue {
     /// Redis Job queue configuration
     public struct Configuration: Sendable {
         /// queue name
         public let queueName: String
         /// Pending queue redis key
-        public let pendingQueueKey: RedisKey
+        public let pendingQueueKey: ValkeyKey
         /// Processing queue redis key
-        public let processingQueueKey: RedisKey
+        public let processingQueueKey: ValkeyKey
         /// Paused queue redis key
-        public let pausedQueueKey: RedisKey
+        public let pausedQueueKey: ValkeyKey
         /// Failed queue redis key
-        public let failedQueueKey: RedisKey
+        public let failedQueueKey: ValkeyKey
         /// Cancelled queue redis key
-        public let cancelledQueueKey: RedisKey
+        public let cancelledQueueKey: ValkeyKey
         /// Completed queue redis key
-        public let completedQueueKey: RedisKey
+        public let completedQueueKey: ValkeyKey
         /// Prefix for metadata
         public let metadataKeyPrefix: String
         /// Queue poll time to wait if queue empties
@@ -45,12 +45,12 @@ extension RedisJobQueue {
             retentionPolicy: RetentionPolicy = .init()
         ) {
             self.queueName = queueName
-            self.pendingQueueKey = RedisKey("\(queueName).pending")
-            self.pausedQueueKey = RedisKey("\(queueName).paused")
-            self.processingQueueKey = RedisKey("\(queueName).processing")
-            self.failedQueueKey = RedisKey("\(queueName).failed")
-            self.cancelledQueueKey = RedisKey("\(queueName).cancelled")
-            self.completedQueueKey = RedisKey("\(queueName).completed")
+            self.pendingQueueKey = ValkeyKey("\(queueName).pending")
+            self.pausedQueueKey = ValkeyKey("\(queueName).paused")
+            self.processingQueueKey = ValkeyKey("\(queueName).processing")
+            self.failedQueueKey = ValkeyKey("\(queueName).failed")
+            self.cancelledQueueKey = ValkeyKey("\(queueName).cancelled")
+            self.completedQueueKey = ValkeyKey("\(queueName).completed")
             self.metadataKeyPrefix = "\(queueName).metadata."
             self.pollTime = pollTime
             self.retentionPolicy = retentionPolicy
