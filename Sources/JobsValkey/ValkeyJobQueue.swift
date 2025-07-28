@@ -26,7 +26,7 @@ import Foundation
 
 /// Redis implementation of job queue driver
 public final class ValkeyJobQueue: JobQueueDriver {
-    public struct JobID: Sendable, CustomStringConvertible, Equatable, RESPRenderable, RESPTokenDecodable {
+    public struct JobID: Sendable, CustomStringConvertible, Equatable, RESPStringRenderable, RESPTokenDecodable {
         let value: String
 
         @usableFromInline
@@ -154,15 +154,18 @@ public final class ValkeyJobQueue: JobQueueDriver {
     @usableFromInline
     func push<Parameters>(jobID: JobID, jobRequest: JobRequest<Parameters>, options: JobOptions) async throws {
         let buffer = try self.jobRegistry.encode(jobRequest: jobRequest)
-        _ = try await self.scripts.addToQueue.runScript(
-            on: self.valkeyClient,
-            keys: [jobID.valkeyKey(for: self), self.configuration.pendingQueueKey],
-            arguments: [
-                String(buffer: buffer),
-                jobID.description,
-                "\(options.delayUntil?.timeIntervalSince1970 ?? Date.now.timeIntervalSince1970)",
-            ]
-        )
+        _ = try await valkeyClient.pipeline(
+            SET(jobID.valkeyKey(for: self), value: buffer),
+            ZADD(
+                self.configuration.pendingQueueKey,
+                data: [
+                    .init(
+                        score: options.delayUntil?.timeIntervalSince1970 ?? Date.now.timeIntervalSince1970,
+                        member: jobID.description
+                    )
+                ]
+            )
+        ).1.get()
     }
 
     /// Flag job is done
@@ -173,17 +176,15 @@ public final class ValkeyJobQueue: JobQueueDriver {
     @inlinable
     public func finished(jobID: JobID) async throws {
         if self.configuration.retentionPolicy.completedJobs == .retain {
-            _ = try await self.scripts.completedAndRetain.runScript(
-                on: self.valkeyClient,
-                keys: [self.configuration.processingQueueKey, self.configuration.completedQueueKey],
-                arguments: [jobID.description, "\(Date.now.timeIntervalSince1970)"]
-            )
+            _ = try await self.valkeyClient.pipeline(
+                LREM(self.configuration.processingQueueKey, count: 0, element: jobID),
+                ZADD(self.configuration.completedQueueKey, data: [.init(score: Date.now.timeIntervalSince1970, member: jobID)])
+            ).1.get()
         } else {
-            _ = try await self.scripts.completed.runScript(
-                on: self.valkeyClient,
-                keys: [self.configuration.processingQueueKey, jobID.valkeyKey(for: self)],
-                arguments: [jobID.description]
-            )
+            _ = try await self.valkeyClient.pipeline(
+                LREM(self.configuration.processingQueueKey, count: 0, element: jobID),
+                DEL(keys: [jobID.valkeyKey(for: self)])
+            ).1.get()
         }
     }
 
@@ -195,18 +196,15 @@ public final class ValkeyJobQueue: JobQueueDriver {
     @inlinable
     public func failed(jobID: JobID, error: Error) async throws {
         if self.configuration.retentionPolicy.failedJobs == .retain {
-            _ = try await self.scripts.moveToFailed.runScript(
-                on: self.valkeyClient,
-                keys: [self.configuration.processingQueueKey, self.configuration.failedQueueKey],
-                arguments: [jobID.description, "\(Date.now.timeIntervalSince1970)"]
-            )
+            _ = try await self.valkeyClient.pipeline(
+                LREM(self.configuration.processingQueueKey, count: 0, element: jobID),
+                ZADD(self.configuration.failedQueueKey, data: [.init(score: Date.now.timeIntervalSince1970, member: jobID)])
+            ).1.get()
         } else {
-            _ = try await self.scripts.failedAndDelete.runScript(
-                on: self.valkeyClient,
-                keys: [self.configuration.processingQueueKey, jobID.valkeyKey(for: self)],
-                arguments: [jobID.description]
-            )
-
+            _ = try await self.valkeyClient.pipeline(
+                LREM(self.configuration.processingQueueKey, count: 0, element: jobID),
+                DEL(keys: [jobID.valkeyKey(for: self)])
+            ).1.get()
         }
     }
 
@@ -282,16 +280,16 @@ extension ValkeyJobQueue: JobMetadataDriver {
     /// - Returns: If lock was acquired
     @inlinable
     public func acquireLock(key: String, id: ByteBuffer, expiresIn: TimeInterval) async throws -> Bool {
-        let key = "\(self.configuration.metadataKeyPrefix)\(key)"
-        let response = try await self.scripts.acquireLock.runScript(
-            on: self.valkeyClient,
-            keys: [.init(key)],
-            arguments: [String(buffer: id), "\(Int(Date.now.timeIntervalSince1970 + expiresIn))"]
-        )
-        if case .null = response.value {
-            return false
-        } else {
-            return true
+        let key = ValkeyKey("\(self.configuration.metadataKeyPrefix)\(key)")
+        return try await self.valkeyClient.withConnection { connection in
+            try await connection.watch(keys: [key])
+            let contents = try await connection.get(key)
+            if contents == id {
+                try await connection.expireat(key, unixTimeSeconds: Date.now + expiresIn)
+                return true
+            } else {
+                return try await connection.set(key, value: id, condition: .nx, expiration: .unixTimeSeconds(Date.now + expiresIn)) != nil
+            }
         }
     }
 
@@ -302,12 +300,13 @@ extension ValkeyJobQueue: JobMetadataDriver {
     ///   - id: Lock identifier
     @inlinable
     public func releaseLock(key: String, id: ByteBuffer) async throws {
-        let key = "\(self.configuration.metadataKeyPrefix)\(key)"
-        _ = try await self.scripts.releaseLock.runScript(
-            on: self.valkeyClient,
-            keys: [.init(key)],
-            arguments: [String(buffer: id)]
-        )
+        let key = ValkeyKey("\(self.configuration.metadataKeyPrefix)\(key)")
+        try await self.valkeyClient.withConnection { connection in
+            let contents = try await connection.get(key)
+            if contents == id {
+                try await connection.del(keys: [key])
+            }
+        }
     }
 }
 
@@ -353,11 +352,10 @@ extension ValkeyJobQueue: CancellableJobQueue {
                 arguments: [jobID.description, "\(Date.now.timeIntervalSince1970)"]
             )
         } else {
-            _ = try await self.scripts.cancel.runScript(
-                on: self.valkeyClient,
-                keys: [self.configuration.pendingQueueKey, jobID.valkeyKey(for: self)],
-                arguments: [jobID.description]
-            )
+            _ = try await self.valkeyClient.pipeline(
+                ZREM(self.configuration.pendingQueueKey, members: [jobID]),
+                DEL(keys: [jobID.valkeyKey(for: self)])
+            ).1.get()
         }
     }
 }

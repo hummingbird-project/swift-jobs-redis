@@ -43,18 +43,7 @@ struct ValkeyScripts: Sendable {
         }
     }
 
-    let addToQueue: ValkeyScript
-    let moveToProcessing: ValkeyScript
-    @usableFromInline
-    let failedAndDelete: ValkeyScript
-    @usableFromInline
-    let moveToFailed: ValkeyScript
-    let moveToPending: ValkeyScript
     let pop: ValkeyScript
-    @usableFromInline
-    let completed: ValkeyScript
-    @usableFromInline
-    let completedAndRetain: ValkeyScript
     @usableFromInline
     let cancel: ValkeyScript
     @usableFromInline
@@ -62,57 +51,12 @@ struct ValkeyScripts: Sendable {
     @usableFromInline
     let pauseResume: ValkeyScript
     let rerunQueue: ValkeyScript
-    let rerunSortedSet: ValkeyScript
-    @usableFromInline
-    let acquireLock: ValkeyScript
-    @usableFromInline
-    let releaseLock: ValkeyScript
 }
 
 extension ValkeyJobQueue {
     /// Upload scripts used by swift-job-redis
     static func uploadScripts(valkeyClient: ValkeyClient, logger: Logger) async throws -> ValkeyScripts {
         let scripts = try ValkeyScripts(
-            addToQueue: .init(
-                """
-                redis.call("SET", KEYS[1], ARGV[1])
-                redis.call("ZADD", KEYS[2], ARGV[3], ARGV[2])
-                return redis.status_reply('OK')
-                """,
-                valkeyClient: valkeyClient
-            ),
-            moveToProcessing: .init(
-                """
-                redis.call("LREM", KEYS[1], 0, ARGV[1])
-                redis.call("LPUSH", KEYS[2], ARGV[1])
-                return redis.status_reply('OK')
-                """,
-                valkeyClient: valkeyClient
-            ),
-            failedAndDelete: .init(
-                """
-                redis.call("LREM", KEYS[1], 0, ARGV[1])
-                redis.call("DEL", KEYS[2])
-                return redis.status_reply('OK')
-                """,
-                valkeyClient: valkeyClient
-            ),
-            moveToFailed: .init(
-                """
-                redis.call("LREM", KEYS[1], 0, ARGV[1])
-                redis.call("ZADD", KEYS[2], ARGV[2], ARGV[1])
-                return redis.status_reply('OK')
-                """,
-                valkeyClient: valkeyClient
-            ),
-            moveToPending: .init(
-                """
-                redis.call("LREM", KEYS[1], 0, ARGV[1])
-                redis.call("ZADD", KEYS[2], 0, ARGV[2])
-                return redis.status_reply('OK')
-                """,
-                valkeyClient: valkeyClient
-            ),
             pop: .init(
                 """
                 local values = redis.call("ZPOPMIN", KEYS[1])
@@ -125,22 +69,6 @@ extension ValkeyJobQueue {
                 end
                 redis.call("LPUSH", KEYS[2], values[1])
                 return values[1]
-                """,
-                valkeyClient: valkeyClient
-            ),
-            completed: .init(
-                """
-                redis.call("LREM", KEYS[1], 0, ARGV[1])
-                redis.call("DEL", KEYS[2])
-                return redis.status_reply('OK')
-                """,
-                valkeyClient: valkeyClient
-            ),
-            completedAndRetain: .init(
-                """
-                redis.call("LREM", KEYS[1], 0, ARGV[1])
-                redis.call("ZADD", KEYS[2], ARGV[2], ARGV[1])
-                return redis.status_reply('OK')
                 """,
                 valkeyClient: valkeyClient
             ),
@@ -186,44 +114,8 @@ extension ValkeyJobQueue {
                 return redis.status_reply('OK')
                 """,
                 valkeyClient: valkeyClient
-            ),
-            rerunSortedSet: .init(
-                """
-                redis.call("ZUNIONSTORE", KEYS[2], 2, KEYS[1], KEYS[2])
-                redis.call("DEL", KEYS[1])
-                return redis.status_reply('OK')
-                """,
-                valkeyClient: valkeyClient
-            ),
-            acquireLock: .init(
-                """
-                if redis.call("GET", KEYS[1]) == ARGV[1] then
-                    redis.call("EXPIREAT", KEYS[1], ARGV[2])
-                    return redis.status_reply('OK')
-                else
-                    return redis.call("SET", KEYS[1], ARGV[1], "NX", "EXAT", ARGV[2])
-                end
-                """,
-                valkeyClient: valkeyClient
-            ),
-            releaseLock: .init(
-                """
-                if redis.call("GET", KEYS[1]) == ARGV[1] then
-                    redis.call("DEL", KEYS[1])
-                else
-                    return 0
-                end
-                """,
-                valkeyClient: valkeyClient
             )
         )
-        logger.debug("AddToQueue script with SHA1 \(scripts.addToQueue.sha1)")
-        logger.debug("Move to processing script with SHA1 \(scripts.moveToProcessing.sha1)")
-        logger.debug("Move to failed script with SHA1 \(scripts.moveToFailed.sha1)")
-        logger.debug("Move to pending script with SHA1 \(scripts.moveToPending.sha1)")
-        logger.debug("Pop script with SHA1 \(scripts.pop.sha1)")
-        logger.debug("Delete script with SHA1 \(scripts.completed.sha1)")
-        logger.debug("Rerun queue script with SHA1 \(scripts.rerunQueue.sha1)")
         return scripts
     }
 }

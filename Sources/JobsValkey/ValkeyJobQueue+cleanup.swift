@@ -208,11 +208,12 @@ extension ValkeyJobQueue {
 
     /// Push all the entries from sorted set back onto the pending sorted set.
     func rerunSortedSet(key: ValkeyKey) async throws {
-        _ = try await self.scripts.rerunSortedSet.runScript(
-            on: self.valkeyClient,
-            keys: [key, self.configuration.pendingQueueKey],
-            arguments: []
-        )
+        try await self.valkeyClient.withConnection { connection in
+            _ = try await connection.transaction(
+                ZUNIONSTORE(destination: self.configuration.pendingQueueKey, keys: [self.configuration.pendingQueueKey, key]),
+                DEL(keys: [key])
+            )
+        }
     }
 
     /// Delete all entries from queue older than specified date
