@@ -26,7 +26,7 @@ jobs:
       image: ${{ matrix.image }}
     services:
       valkey:
-        image: valkey
+        image: valkey/valkey
         ports:
           - 6379:6379
         options: --entrypoint valkey-server
@@ -40,7 +40,7 @@ jobs:
     - name: Convert coverage files
       run: |
         llvm-cov export -format="lcov" \
-          .build/debug/swift-jobs-redisPackageTests.xctest \
+          .build/debug/swift-jobs-valkeyPackageTests.xctest \
           -ignore-filename-regex="\/Tests\/" \
           -ignore-filename-regex="\/Benchmarks\/" \
           -instr-profile .build/debug/codecov/default.profdata > info.lcov
