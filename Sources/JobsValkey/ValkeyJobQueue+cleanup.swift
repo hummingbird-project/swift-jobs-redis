@@ -186,7 +186,7 @@ extension ValkeyJobQueue {
     /// Push all the entries from list back onto the main list.
     func rerunSet(key: ValkeyKey) async throws {
         _ = try await self.scripts.rerunQueue.runScript(
-            on: self.valkeyClient,
+            valkeyClient: self.valkeyClient,
             keys: [key, self.configuration.pendingQueueKey],
             arguments: []
         )

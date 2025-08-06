@@ -114,8 +114,13 @@ public final class ValkeyJobQueue: JobQueueDriver {
         self.isStopped = .init(false)
         self.jobRegistry = .init()
         self.logger = logger
-        self.scripts = try await Self.uploadScripts(valkeyClient: valkeyClient, logger: logger)
+        self.scripts = try await Self.setupScripts(valkeyClient: valkeyClient, logger: logger)
         self.registerCleanupJob()
+    }
+
+    /// Initialize script load and wait until it has finished
+    public func waitUntilReady() async throws {
+        try await self.scripts.loadScripts(valkeyClient: self.valkeyClient)
     }
 
     ///  Register job
@@ -154,7 +159,7 @@ public final class ValkeyJobQueue: JobQueueDriver {
     @usableFromInline
     func push<Parameters>(jobID: JobID, jobRequest: JobRequest<Parameters>, options: JobOptions) async throws {
         let buffer = try self.jobRegistry.encode(jobRequest: jobRequest)
-        _ = try await valkeyClient.pipeline(
+        _ = try await valkeyClient.execute(
             SET(jobID.valkeyKey(for: self), value: buffer),
             ZADD(
                 self.configuration.pendingQueueKey,
@@ -176,12 +181,12 @@ public final class ValkeyJobQueue: JobQueueDriver {
     @inlinable
     public func finished(jobID: JobID) async throws {
         if self.configuration.retentionPolicy.completedJobs == .retain {
-            _ = try await self.valkeyClient.pipeline(
+            _ = try await self.valkeyClient.execute(
                 LREM(self.configuration.processingQueueKey, count: 0, element: jobID),
                 ZADD(self.configuration.completedQueueKey, data: [.init(score: Date.now.timeIntervalSince1970, member: jobID)])
             ).1.get()
         } else {
-            _ = try await self.valkeyClient.pipeline(
+            _ = try await self.valkeyClient.execute(
                 LREM(self.configuration.processingQueueKey, count: 0, element: jobID),
                 DEL(keys: [jobID.valkeyKey(for: self)])
             ).1.get()
@@ -196,12 +201,12 @@ public final class ValkeyJobQueue: JobQueueDriver {
     @inlinable
     public func failed(jobID: JobID, error: Error) async throws {
         if self.configuration.retentionPolicy.failedJobs == .retain {
-            _ = try await self.valkeyClient.pipeline(
+            _ = try await self.valkeyClient.execute(
                 LREM(self.configuration.processingQueueKey, count: 0, element: jobID),
                 ZADD(self.configuration.failedQueueKey, data: [.init(score: Date.now.timeIntervalSince1970, member: jobID)])
             ).1.get()
         } else {
-            _ = try await self.valkeyClient.pipeline(
+            _ = try await self.valkeyClient.execute(
                 LREM(self.configuration.processingQueueKey, count: 0, element: jobID),
                 DEL(keys: [jobID.valkeyKey(for: self)])
             ).1.get()
@@ -220,7 +225,7 @@ public final class ValkeyJobQueue: JobQueueDriver {
     @usableFromInline
     func popFirst() async throws -> JobQueueResult<JobID>? {
         let value = try await self.scripts.pop.runScript(
-            on: self.valkeyClient,
+            valkeyClient: self.valkeyClient,
             keys: [self.configuration.pendingQueueKey, self.configuration.processingQueueKey],
             arguments: ["\(Date.now.timeIntervalSince1970)"]
         )
@@ -347,12 +352,12 @@ extension ValkeyJobQueue: CancellableJobQueue {
     public func cancel(jobID: JobID) async throws {
         if self.configuration.retentionPolicy.cancelledJobs == .retain {
             _ = try await self.scripts.cancelAndRetain.runScript(
-                on: self.valkeyClient,
+                valkeyClient: self.valkeyClient,
                 keys: [self.configuration.pendingQueueKey, self.configuration.cancelledQueueKey],
                 arguments: [jobID.description, "\(Date.now.timeIntervalSince1970)"]
             )
         } else {
-            _ = try await self.valkeyClient.pipeline(
+            _ = try await self.valkeyClient.execute(
                 ZREM(self.configuration.pendingQueueKey, members: [jobID]),
                 DEL(keys: [jobID.valkeyKey(for: self)])
             ).1.get()
@@ -369,7 +374,7 @@ extension ValkeyJobQueue: ResumableJobQueue {
     @inlinable
     public func pause(jobID: JobID) async throws {
         _ = try await self.scripts.pauseResume.runScript(
-            on: self.valkeyClient,
+            valkeyClient: self.valkeyClient,
             keys: [self.configuration.pendingQueueKey, self.configuration.pausedQueueKey],
             arguments: [jobID.description]
         )
@@ -383,7 +388,7 @@ extension ValkeyJobQueue: ResumableJobQueue {
     @inlinable
     public func resume(jobID: JobID) async throws {
         _ = try await self.scripts.pauseResume.runScript(
-            on: self.valkeyClient,
+            valkeyClient: self.valkeyClient,
             keys: [self.configuration.pausedQueueKey, self.configuration.pendingQueueKey],
             arguments: [jobID.description]
         )

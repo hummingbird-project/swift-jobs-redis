@@ -17,7 +17,9 @@ import NIOCore
 import Valkey
 
 @usableFromInline
-struct ValkeyScripts: Sendable {
+struct ValkeyScripts: Sendable, ~Copyable {
+    let loadScripts: AsyncInitializedGlobal<Void>
+
     @usableFromInline
     final class ValkeyScript: @unchecked Sendable {
         let script: String
@@ -29,17 +31,47 @@ struct ValkeyScripts: Sendable {
         }
 
         @usableFromInline
+        func loadScript(valkeyClient: ValkeyClient) async throws {
+            self.sha1 = try await valkeyClient.scriptLoad(script: self.script)
+        }
+
+        @usableFromInline
         func runScript(
-            on valkeyClient: ValkeyClient,
+            valkeyClient: ValkeyClient,
             keys: [ValkeyKey],
             arguments: [String] = []
         ) async throws -> RESPToken {
-            do {
-                return try await valkeyClient.evalsha(sha1: self.sha1, keys: keys, args: arguments)
-            } catch let error as ValkeyClientError where error.message?.hasPrefix("NOSCRIPT") == true {
-                self.sha1 = try await valkeyClient.scriptLoad(script: self.script)
-                return try await runScript(on: valkeyClient, keys: keys, arguments: arguments)
+            func _runScript(
+                valkeyClient: ValkeyClient,
+                sha1: ByteBuffer,
+                keys: [ValkeyKey],
+                arguments: [String]
+            ) async throws -> RESPToken {
+                do {
+                    return try await valkeyClient.evalsha(sha1: sha1, keys: keys, args: arguments)
+                } catch let error as ValkeyClientError where error.message?.hasPrefix("NOSCRIPT") == true {
+                    let sha1 = try await valkeyClient.scriptLoad(script: self.script)
+                    return try await _runScript(valkeyClient: valkeyClient, sha1: sha1, keys: keys, arguments: arguments)
+                }
             }
+            return try await _runScript(valkeyClient: valkeyClient, sha1: self.sha1, keys: keys, arguments: arguments)
+        }
+    }
+
+    func loadScripts(valkeyClient: ValkeyClient) async throws {
+        try await self.loadScripts.acquire {
+            let (popResult, cancelResult, cancelAndRetainResult, pauseResumeResult, rerunQueueResult) = await valkeyClient.execute(
+                SCRIPT.LOAD(script: pop.script),
+                SCRIPT.LOAD(script: cancel.script),
+                SCRIPT.LOAD(script: cancelAndRetain.script),
+                SCRIPT.LOAD(script: pauseResume.script),
+                SCRIPT.LOAD(script: rerunQueue.script)
+            )
+            self.pop.sha1 = try popResult.get()
+            self.cancel.sha1 = try cancelResult.get()
+            self.cancelAndRetain.sha1 = try cancelAndRetainResult.get()
+            self.pauseResume.sha1 = try pauseResumeResult.get()
+            self.rerunQueue.sha1 = try rerunQueueResult.get()
         }
     }
 
@@ -55,8 +87,9 @@ struct ValkeyScripts: Sendable {
 
 extension ValkeyJobQueue {
     /// Upload scripts used by swift-job-valkey
-    static func uploadScripts(valkeyClient: ValkeyClient, logger: Logger) async throws -> ValkeyScripts {
+    static func setupScripts(valkeyClient: ValkeyClient, logger: Logger) async throws -> ValkeyScripts {
         let scripts = try ValkeyScripts(
+            loadScripts: .init(),
             pop: .init(
                 """
                 local values = redis.call("ZPOPMIN", KEYS[1])
