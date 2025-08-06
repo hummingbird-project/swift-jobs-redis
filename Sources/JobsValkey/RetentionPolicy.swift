@@ -18,7 +18,7 @@ import FoundationEssentials
 import Foundation
 #endif
 
-extension RedisJobQueue {
+extension ValkeyJobQueue {
     /// Data rentension policy
     public struct RetentionPolicy: Sendable {
         /// Data retention policy
