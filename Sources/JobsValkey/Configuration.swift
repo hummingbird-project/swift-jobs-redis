@@ -13,25 +13,25 @@
 //===----------------------------------------------------------------------===//
 
 import NIOCore
-@preconcurrency import RediStack
+import Valkey
 
-extension RedisJobQueue {
-    /// Redis Job queue configuration
+extension ValkeyJobQueue {
+    /// Valkey Job queue configuration
     public struct Configuration: Sendable {
         /// queue name
         public let queueName: String
-        /// Pending queue redis key
-        public let pendingQueueKey: RedisKey
-        /// Processing queue redis key
-        public let processingQueueKey: RedisKey
-        /// Paused queue redis key
-        public let pausedQueueKey: RedisKey
-        /// Failed queue redis key
-        public let failedQueueKey: RedisKey
-        /// Cancelled queue redis key
-        public let cancelledQueueKey: RedisKey
-        /// Completed queue redis key
-        public let completedQueueKey: RedisKey
+        /// Pending queue Valkey key
+        public let pendingQueueKey: ValkeyKey
+        /// Processing queue Valkey key
+        public let processingQueueKey: ValkeyKey
+        /// Paused queue Valkey key
+        public let pausedQueueKey: ValkeyKey
+        /// Failed queue Valkey key
+        public let failedQueueKey: ValkeyKey
+        /// Cancelled queue Valkey key
+        public let cancelledQueueKey: ValkeyKey
+        /// Completed queue Valkey key
+        public let completedQueueKey: ValkeyKey
         /// Prefix for metadata
         public let metadataKeyPrefix: String
         /// Queue poll time to wait if queue empties
@@ -45,12 +45,12 @@ extension RedisJobQueue {
             retentionPolicy: RetentionPolicy = .init()
         ) {
             self.queueName = queueName
-            self.pendingQueueKey = RedisKey("\(queueName).pending")
-            self.pausedQueueKey = RedisKey("\(queueName).paused")
-            self.processingQueueKey = RedisKey("\(queueName).processing")
-            self.failedQueueKey = RedisKey("\(queueName).failed")
-            self.cancelledQueueKey = RedisKey("\(queueName).cancelled")
-            self.completedQueueKey = RedisKey("\(queueName).completed")
+            self.pendingQueueKey = ValkeyKey("\(queueName).pending")
+            self.pausedQueueKey = ValkeyKey("\(queueName).paused")
+            self.processingQueueKey = ValkeyKey("\(queueName).processing")
+            self.failedQueueKey = ValkeyKey("\(queueName).failed")
+            self.cancelledQueueKey = ValkeyKey("\(queueName).cancelled")
+            self.completedQueueKey = ValkeyKey("\(queueName).completed")
             self.metadataKeyPrefix = "\(queueName).metadata."
             self.pollTime = pollTime
             self.retentionPolicy = retentionPolicy

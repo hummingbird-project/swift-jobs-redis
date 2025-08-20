@@ -1,0 +1,8 @@
+
+services:
+  valkey:
+    image: redis:latest
+    ports:
+      - 6379:6379
+    healthcheck:
+      test: [ "CMD", "redis-cli", "--raw", "incr", "ping" ]
