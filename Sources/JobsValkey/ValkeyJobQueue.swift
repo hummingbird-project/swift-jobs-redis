@@ -99,9 +99,9 @@ public final class ValkeyJobQueue: JobQueueDriver {
     @usableFromInline
     let isStopped: Atomic<Bool>
     @usableFromInline
-    let scripts: ValkeyScripts
-    @usableFromInline
     let logger: Logger
+
+    let loadFunctions: AsyncInitializedGlobal<Void>
 
     /// Initialize Valkey job queue
     /// - Parameters:
@@ -114,13 +114,13 @@ public final class ValkeyJobQueue: JobQueueDriver {
         self.isStopped = .init(false)
         self.jobRegistry = .init()
         self.logger = logger
-        self.scripts = try await Self.setupScripts(valkeyClient: valkeyClient, logger: logger)
+        self.loadFunctions = .init()
         self.registerCleanupJob()
     }
 
-    /// Initialize script load and wait until it has finished
+    /// Initialize loading of functions and wait until it has finished
     public func waitUntilReady() async throws {
-        try await self.scripts.loadScripts(valkeyClient: self.valkeyClient)
+        try await self.loadFunctions()
     }
 
     ///  Register job
@@ -224,10 +224,10 @@ public final class ValkeyJobQueue: JobQueueDriver {
     /// - Returns: queued job
     @usableFromInline
     func popFirst() async throws -> JobQueueResult<JobID>? {
-        let value = try await self.scripts.pop.runScript(
-            valkeyClient: self.valkeyClient,
+        let value = try await self.valkeyClient.fcall(
+            function: "pop",
             keys: [self.configuration.pendingQueueKey, self.configuration.processingQueueKey],
-            arguments: ["\(Date.now.timeIntervalSince1970)"]
+            args: ["\(Date.now.timeIntervalSince1970)"]
         )
         guard let jobID = try? value.decode(as: JobID.self) else {
             return nil
@@ -351,10 +351,10 @@ extension ValkeyJobQueue: CancellableJobQueue {
     @inlinable
     public func cancel(jobID: JobID) async throws {
         if self.configuration.retentionPolicy.cancelledJobs == .retain {
-            _ = try await self.scripts.cancelAndRetain.runScript(
-                valkeyClient: self.valkeyClient,
+            _ = try await self.valkeyClient.fcall(
+                function: "cancelAndRetain",
                 keys: [self.configuration.pendingQueueKey, self.configuration.cancelledQueueKey],
-                arguments: [jobID.description, "\(Date.now.timeIntervalSince1970)"]
+                args: [jobID.description, "\(Date.now.timeIntervalSince1970)"]
             )
         } else {
             _ = try await self.valkeyClient.execute(
@@ -373,10 +373,10 @@ extension ValkeyJobQueue: ResumableJobQueue {
     ///  - jobID: Job id
     @inlinable
     public func pause(jobID: JobID) async throws {
-        _ = try await self.scripts.pauseResume.runScript(
-            valkeyClient: self.valkeyClient,
+        _ = try await self.valkeyClient.fcall(
+            function: "pauseResume",
             keys: [self.configuration.pendingQueueKey, self.configuration.pausedQueueKey],
-            arguments: [jobID.description]
+            args: [jobID.description]
         )
     }
 
@@ -387,10 +387,10 @@ extension ValkeyJobQueue: ResumableJobQueue {
     ///  - jobID: Job id
     @inlinable
     public func resume(jobID: JobID) async throws {
-        _ = try await self.scripts.pauseResume.runScript(
-            valkeyClient: self.valkeyClient,
+        _ = try await self.valkeyClient.fcall(
+            function: "pauseResume",
             keys: [self.configuration.pausedQueueKey, self.configuration.pendingQueueKey],
-            arguments: [jobID.description]
+            args: [jobID.description]
         )
     }
 }
