@@ -225,7 +225,7 @@ public final class ValkeyJobQueue: JobQueueDriver {
     @usableFromInline
     func popFirst() async throws -> JobQueueResult<JobID>? {
         let value = try await self.valkeyClient.fcall(
-            function: "pop",
+            function: "swiftjobs_pop",
             keys: [self.configuration.pendingQueueKey, self.configuration.processingQueueKey],
             args: ["\(Date.now.timeIntervalSince1970)"]
         )
@@ -352,7 +352,7 @@ extension ValkeyJobQueue: CancellableJobQueue {
     public func cancel(jobID: JobID) async throws {
         if self.configuration.retentionPolicy.cancelledJobs == .retain {
             _ = try await self.valkeyClient.fcall(
-                function: "cancelAndRetain",
+                function: "swiftjobs_cancelAndRetain",
                 keys: [self.configuration.pendingQueueKey, self.configuration.cancelledQueueKey],
                 args: [jobID.description, "\(Date.now.timeIntervalSince1970)"]
             )
@@ -374,7 +374,7 @@ extension ValkeyJobQueue: ResumableJobQueue {
     @inlinable
     public func pause(jobID: JobID) async throws {
         _ = try await self.valkeyClient.fcall(
-            function: "pauseResume",
+            function: "swiftjobs_pauseResume",
             keys: [self.configuration.pendingQueueKey, self.configuration.pausedQueueKey],
             args: [jobID.description]
         )
@@ -388,7 +388,7 @@ extension ValkeyJobQueue: ResumableJobQueue {
     @inlinable
     public func resume(jobID: JobID) async throws {
         _ = try await self.valkeyClient.fcall(
-            function: "pauseResume",
+            function: "swiftjobs_pauseResume",
             keys: [self.configuration.pausedQueueKey, self.configuration.pendingQueueKey],
             args: [jobID.description]
         )
