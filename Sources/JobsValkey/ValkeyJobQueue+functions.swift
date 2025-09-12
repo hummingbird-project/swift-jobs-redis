@@ -17,13 +17,26 @@ import NIOCore
 import Valkey
 
 extension ValkeyJobQueue {
+    static let FunctionVersion = 1
     /// Upload Valkey JobQueue functions to server
     public func loadFunctions() async throws {
+        // Only load function if they don't exist or the version number is different
+        do {
+            let version = try await self.valkeyClient.fcall(function: "swiftjobs_version").decode(as: Int.self)
+            if version == Self.FunctionVersion {
+                return
+            }
+        } catch let error as ValkeyClientError where error.errorCode == .commandError {
+        }
         try await self.loadFunctions.acquire {
             _ = try await self.valkeyClient.functionLoad(
                 replace: true,
                 functionCode: """
                     #!lua name=_swift_jobs_valkey
+
+                    local function version()
+                        return 1
+                    end
 
                     local function pop(keys, args)
                         local values = redis.call("ZPOPMIN", keys[1])
@@ -73,11 +86,12 @@ extension ValkeyJobQueue {
                         return redis.status_reply('OK')
                     end
 
-                    server.register_function('pop', pop)
-                    server.register_function('cancel', cancel)
-                    server.register_function('cancelAndRetain', cancelAndRetain)
-                    server.register_function('pauseResume', pauseResume)
-                    server.register_function('rerunQueue', rerunQueue)
+                    server.register_function('swiftjobs_version', version)
+                    server.register_function('swiftjobs_pop', pop)
+                    server.register_function('swiftjobs_cancel', cancel)
+                    server.register_function('swiftjobs_cancelAndRetain', cancelAndRetain)
+                    server.register_function('swiftjobs_pauseResume', pauseResume)
+                    server.register_function('swiftjobs_rerunQueue', rerunQueue)
                     """
             )
         }
