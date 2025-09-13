@@ -61,10 +61,23 @@ struct AsyncInitializedGlobal<Value: Sendable>: ~Copyable, Sendable {
                     state = .acquired(value)
                     return value
                 }
+            } catch is CancellationError {
+                self.state.withLock { state in
+                    guard case .acquiring(var continuations) = state else {
+                        preconditionFailure("State should still be acquiring")
+                    }
+                    if let lastContinuation = continuations.popLast() {
+                        state = .acquiring(continuations)
+                        lastContinuation.resume(returning: .acquire)
+                    } else {
+                        state = .uninitialized
+                    }
+                }
+                throw CancellationError()
             } catch {
                 return try self.state.withLock { state in
                     guard case .acquiring(let continuations) = state else {
-                        preconditionFailure("Can't have state set to none, while acquiring connection")
+                        preconditionFailure("State should still be acquiring")
                     }
                     for cont in continuations {
                         cont.resume(throwing: error)
