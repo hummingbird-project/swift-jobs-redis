@@ -190,6 +190,8 @@ struct JobsValkeyTests {
             let job2 = try await jobQueue.queue.popFirst()
             #expect(job2 == nil)
 
+            try await jobQueue.queue.cleanup(pendingJobs: .remove)
+
             group.cancelAll()
         }
     }
@@ -223,6 +225,8 @@ struct JobsValkeyTests {
 
             let pendingJobs = try await jobQueue.queue.valkeyClient.llen(jobQueue.queue.configuration.pendingQueueKey)
             #expect(pendingJobs == 0)
+
+            try await jobQueue.queue.cleanup(failedJobs: .remove)
         }
     }
 
@@ -330,6 +334,8 @@ struct JobsValkeyTests {
             try await jobQueue.push(TestIntParameter(value: 2))
             try await jobQueue.push(TestStringParameter(value: "test"))
             try await expectation.wait()
+
+            try await jobQueue.queue.cleanup(failedJobs: .remove)
         }
         string.withLock {
             #expect($0 == "test")
@@ -525,6 +531,7 @@ struct JobsValkeyTests {
             }
 
             try await expectation.wait()
+            try await jobQueue.queue.cleanup(processingJobs: .remove)
             await serviceGroup.triggerGracefulShutdown()
             group.cancelAll()
         }
@@ -579,6 +586,9 @@ struct JobsValkeyTests {
             try await expectation.wait(count: 1)
             try await jobQueue.resumeJob(jobID: pausableJob)
             try await expectation.wait(count: 1)
+
+            try await jobQueue.queue.cleanup(processingJobs: .remove)
+
             await serviceGroup.triggerGracefulShutdown()
             group.cancelAll()
         }
@@ -734,6 +744,9 @@ struct JobsValkeyTests {
                 max: .infinity
             )
             #expect(pendingJobsCount == 2)
+
+            try await jobQueue.queue.cleanup(pendingJobs: .remove, processingJobs: .remove)
+
             group.cancelAll()
         }
     }
@@ -818,6 +831,8 @@ struct JobsValkeyTests {
 
             let exists = try await jobQueue.queue.valkeyClient.exists(keys: [jobID.valkeyKey(for: jobQueue.queue)])
             #expect(exists == 1)
+
+            try await jobQueue.queue.cleanup(pendingJobs: .remove)
             group.cancelAll()
         }
     }
@@ -886,6 +901,8 @@ struct JobsValkeyTests {
                     min: 0,
                     max: .infinity
                 )
+
+                try await jobQueue2.queue.cleanup(failedJobs: .remove)
                 #expect(failedJobsCount == 1)
             }
         }
@@ -955,8 +972,8 @@ struct JobsValkeyTests {
     }
 
     @Test func testMultipleQueueMetadataLock() async throws {
-        try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "queue1")) { jobQueue1 in
-            try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "queue2")) { jobQueue2 in
+        try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "testMultipleQueueMetadataLock1")) { jobQueue1 in
+            try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "testMultipleQueueMetadataLock2")) { jobQueue2 in
                 let result1 = try await jobQueue1.queue.acquireLock(
                     key: "testMultipleQueueMetadataLock",
                     id: .init(string: "queue1"),
