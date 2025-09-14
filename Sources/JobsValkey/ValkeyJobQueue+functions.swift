@@ -18,7 +18,19 @@ import Valkey
 
 extension ValkeyJobQueue {
     static let FunctionVersion = 1
-    /// Upload Valkey JobQueue functions to server
+    /// Upload Valkey JobQueue lua functions to server.
+    ///
+    /// This includes functions
+    /// - swiftjobs_pop: Get latest job
+    /// - swiftjobs_cancel: Called when cancelling a job
+    /// - swiftjobs_cancelAndRetain: Called when cancelling a job and cancelled jobs are retained
+    /// - swiftjobs_pauseResume: Called when moving between paused and non-paused state
+    /// - swiftjobs_rerunQueue: Called during job cleanup and moving the contents of processing set
+    ///        back onto the pending queue.
+    ///
+    /// If running the job queue handler this is done automatically. If you are not
+    /// running the job queue handler you should call this to ensure the job queue
+    /// functions are available.
     public func loadFunctions() async throws {
         // Only load function if they don't exist or the version number is different
         do {
