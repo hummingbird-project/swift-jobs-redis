@@ -692,6 +692,48 @@ struct JobsValkeyTests {
         }
     }
 
+    @Test func testPausedJobRetention() async throws {
+        let jobQueue = try await self.createJobQueue(numWorkers: 1)
+        let jobName = JobName<Int>("testPausedJobRetention")
+        jobQueue.registerJob(name: jobName) { _, _ in }
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await jobQueue.queue.valkeyClient.run()
+            }
+
+            try await jobQueue.queue.cleanup(
+                pendingJobs: .remove,
+                processingJobs: .remove,
+                completedJobs: .remove,
+                failedJobs: .remove,
+                cancelledJobs: .remove
+            )
+
+            for _ in 0..<150 {
+                let jobId = try await jobQueue.push(jobName, parameters: 1)
+                try await jobQueue.pauseJob(jobID: jobId)
+            }
+
+            var pausedJobsCount = try await jobQueue.queue.valkeyClient.zcount(
+                jobQueue.queue.configuration.pausedQueueKey,
+                min: 0,
+                max: .infinity
+            )
+            #expect(pausedJobsCount == 150)
+
+            try await jobQueue.queue.cleanup(pausedJobs: .remove(maxAge: .seconds(0)))
+
+            pausedJobsCount = try await jobQueue.queue.valkeyClient.zcount(
+                jobQueue.queue.configuration.pausedQueueKey,
+                min: 0,
+                max: .infinity
+            )
+            #expect(pausedJobsCount == 0)
+            group.cancelAll()
+        }
+    }
+
     @Test func testCancelledJobRerun() async throws {
         let jobQueue = try await self.createJobQueue(
             numWorkers: 1,

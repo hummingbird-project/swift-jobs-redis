@@ -26,20 +26,24 @@ public struct ValkeyJobCleanupParameters: Sendable & Codable {
     let completedJobs: ValkeyJobQueue.JobCleanup
     let failedJobs: ValkeyJobQueue.JobCleanup
     let cancelledJobs: ValkeyJobQueue.JobCleanup
+    let pausedJobs: ValkeyJobQueue.JobCleanup
 
     ///  Initialize ValkeyJobCleanupParameters
     /// - Parameters:
     ///   - completedJobs: What to do with completed jobs
     ///   - failedJobs: What to do with failed jobs
     ///   - cancelledJobs: What to do with cancelled jobs
+    ///   - pausedJobs: What to do with paused jobs
     public init(
         completedJobs: ValkeyJobQueue.JobCleanup = .doNothing,
         failedJobs: ValkeyJobQueue.JobCleanup = .doNothing,
-        cancelledJobs: ValkeyJobQueue.JobCleanup = .doNothing
+        cancelledJobs: ValkeyJobQueue.JobCleanup = .doNothing,
+        pausedJobs: ValkeyJobQueue.JobCleanup = .doNothing
     ) {
         self.completedJobs = completedJobs
         self.failedJobs = failedJobs
         self.cancelledJobs = cancelledJobs
+        self.pausedJobs = pausedJobs
     }
 }
 
@@ -53,9 +57,13 @@ extension ValkeyJobQueue {
         }
         let rawValue: RawValue
 
+        /// Do nothing to jobs
         public static var doNothing: Self { .init(rawValue: .doNothing) }
+        /// Add jobs back onto the pending queue
         public static var rerun: Self { .init(rawValue: .rerun) }
+        /// Delete jobs
         public static var remove: Self { .init(rawValue: .remove(maxAge: nil)) }
+        /// Delete jobs older than `maxAge`
         public static func remove(maxAge: Duration) -> Self { .init(rawValue: .remove(maxAge: maxAge)) }
     }
 
@@ -103,7 +111,8 @@ extension ValkeyJobQueue {
                     processingJobs: .doNothing,
                     completedJobs: parameters.completedJobs,
                     failedJobs: parameters.failedJobs,
-                    cancelledJobs: parameters.cancelledJobs
+                    cancelledJobs: parameters.cancelledJobs,
+                    pausedJobs: parameters.pausedJobs
                 )
             }
         )
@@ -111,16 +120,15 @@ extension ValkeyJobQueue {
 
     /// Cleanup job queues
     ///
-    /// This function is used to re-run or delete jobs in a certain state. Failed jobs can be
-    /// pushed back into the pending queue to be re-run or removed. When called at startup in
-    /// theory no job should be set to processing, or set to pending but not in the queue. but if
-    /// your job server crashes these states are possible, so we also provide options to re-queue
-    /// these jobs so they are run again.
+    /// This function is used to re-run or delete jobs in a certain state. Failed, completed,
+    /// cancelled and paused jobs can be pushed back into the pending queue to be re-run or removed.
+    /// When called at startup in theory no job should be set to processing, or set to pending but
+    /// not in the queue. but if your job server crashes these states are possible, so we also provide
+    /// options to re-queue these jobs so they are run again.
     ///
-    /// The job queue needs to be running when you call cleanup. You can call `cleanup` with
-    /// `failedJobs`` set to whatever you like at any point to re-queue failed jobs. Moving processing
-    /// or pending jobs should only be done if you are certain there is nothing else processing
-    /// the job queue.
+    /// You can call `cleanup` with `failedJobs`, `completedJobs`, `cancelledJobs` or `pausedJobs` set
+    /// to whatever you like at any point to re-queue failed jobs. Moving processing or pending jobs
+    /// should only be done if you are certain there is nothing processing the job queue.
     ///
     /// - Parameters:
     ///   - pendingJobs: What to do with jobs tagged as pending
@@ -128,13 +136,15 @@ extension ValkeyJobQueue {
     ///   - completedJobs: What to do with jobs tagged as completed
     ///   - failedJobs: What to do with jobs tagged as failed
     ///   - cancelledJobs: What to do with jobs tagged as cancelled
+    ///   - pausedJobs: What to do with jobs tagged as cancelled
     /// - Throws:
     public func cleanup(
         pendingJobs: PendingJobCleanup = .doNothing,
         processingJobs: ProcessingJobCleanup = .doNothing,
         completedJobs: JobCleanup = .doNothing,
         failedJobs: JobCleanup = .doNothing,
-        cancelledJobs: JobCleanup = .doNothing
+        cancelledJobs: JobCleanup = .doNothing,
+        pausedJobs: JobCleanup = .doNothing
     ) async throws {
         try await self.cleanupPendingQueue(queueKey: self.configuration.pendingQueueKey, cleanup: pendingJobs)
         // there shouldn't be any on the processing list, but if there are we should do something with them
@@ -142,6 +152,7 @@ extension ValkeyJobQueue {
         try await self.cleanupSortedSet(key: self.configuration.failedQueueKey, cleanup: failedJobs)
         try await self.cleanupSortedSet(key: self.configuration.cancelledQueueKey, cleanup: cancelledJobs)
         try await self.cleanupSortedSet(key: self.configuration.completedQueueKey, cleanup: completedJobs)
+        try await self.cleanupSortedSet(key: self.configuration.pausedQueueKey, cleanup: pausedJobs)
     }
 
     /// What to do with set at initialization
