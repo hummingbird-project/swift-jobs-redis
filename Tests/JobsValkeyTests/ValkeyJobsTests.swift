@@ -17,43 +17,26 @@ import Jobs
 import Logging
 import NIOCore
 import NIOPosix
-@preconcurrency import RediStack
 import ServiceLifecycle
 import Synchronization
 import Testing
+import Valkey
 
-@testable import JobsRedis
+@testable import JobsValkey
 
-struct RedisJobsTests {
-    static let redisHostname = ProcessInfo.processInfo.environment["REDIS_HOSTNAME"] ?? "localhost"
-
-    func createRedisConnectionPool(logger: Logger) throws -> RedisConnectionPool {
-        try RedisConnectionPool(
-            configuration: .init(
-                initialServerConnectionAddresses: [.makeAddressResolvingHost(Self.redisHostname, port: 6379)],
-                maximumConnectionCount: .maximumActiveConnections(2),
-                connectionFactoryConfiguration: .init(
-                    connectionDefaultLogger: logger,
-                    tcpClient: nil
-                ),
-                minimumConnectionCount: 0,
-                connectionBackoffFactor: 2,
-                initialConnectionBackoffDelay: .milliseconds(100)
-            ),
-            boundEventLoop: MultiThreadedEventLoopGroup.singleton.any()
-        )
-    }
+struct JobsValkeyTests {
+    static let valkeyHostname = ProcessInfo.processInfo.environment["VALKEY_HOSTNAME"] ?? "127.0.0.1"
 
     func createJobQueue(
         numWorkers: Int,
-        configuration: RedisJobQueue.Configuration = .init(),
+        configuration: ValkeyJobQueue.Configuration = .init(),
         function: String = #function
-    ) async throws -> JobQueue<RedisJobQueue> {
+    ) async throws -> JobQueue<ValkeyJobQueue> {
         var logger = Logger(label: function)
         logger.logLevel = .debug
-        let redis = try createRedisConnectionPool(logger: logger)
+        let valkey = ValkeyClient(.hostname(Self.valkeyHostname, port: 6379), logger: logger)
         return try await JobQueue(
-            .redis(redis, configuration: configuration, logger: logger),
+            .valkey(valkey, configuration: configuration, logger: logger),
             logger: logger,
             options: .init(
                 defaultRetryStrategy: .exponentialJitter(maxBackoff: .milliseconds(10))
@@ -67,17 +50,16 @@ struct RedisJobsTests {
     /// shutdown correctly
     @discardableResult public func testJobQueue<T>(
         numWorkers: Int,
-        configuration: RedisJobQueue.Configuration,
-        failedJobsInitialization: RedisJobQueue.JobCleanup = .remove,
-        test: (JobQueue<RedisJobQueue>) async throws -> T,
+        configuration: ValkeyJobQueue.Configuration,
+        failedJobsInitialization: ValkeyJobQueue.JobCleanup = .remove,
+        test: (JobQueue<ValkeyJobQueue>) async throws -> T,
         function: String = #function
     ) async throws -> T {
         let jobQueue = try await createJobQueue(numWorkers: numWorkers, configuration: configuration, function: function)
-        let redisService = RedisConnectionPoolService(jobQueue.queue.redisConnectionPool.wrappedValue)
         return try await withThrowingTaskGroup(of: Void.self) { group in
             let serviceGroup = ServiceGroup(
                 configuration: .init(
-                    services: [redisService, jobQueue.processor(options: .init(numWorkers: numWorkers))],
+                    services: [jobQueue.queue.valkeyClient, jobQueue.processor(options: .init(numWorkers: numWorkers))],
                     gracefulShutdownSignals: [.sigterm, .sigint],
                     logger: Logger(label: "JobQueueService")
                 )
@@ -194,15 +176,24 @@ struct RedisJobsTests {
             numWorkers: 1,
             configuration: .init(queueName: #function, retentionPolicy: .init(cancelledJobs: .retain))
         )
-        try await jobQueue.queue.cleanup(pendingJobs: .remove, processingJobs: .remove, failedJobs: .remove)
-        try await jobQueue.push(
-            TestParameters(),
-            options: .init(delayUntil: Date.now.addingTimeInterval(5))
-        )
-        let job = try await jobQueue.queue.popFirst()
-        #expect(job == nil)
-        let job2 = try await jobQueue.queue.popFirst()
-        #expect(job2 == nil)
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await jobQueue.queue.valkeyClient.run()
+            }
+            try await jobQueue.queue.cleanup(pendingJobs: .remove, processingJobs: .remove, failedJobs: .remove)
+            try await jobQueue.push(
+                TestParameters(),
+                options: .init(delayUntil: Date.now.addingTimeInterval(5))
+            )
+            let job = try await jobQueue.queue.popFirst()
+            #expect(job == nil)
+            let job2 = try await jobQueue.queue.popFirst()
+            #expect(job2 == nil)
+
+            try await jobQueue.queue.cleanup(pendingJobs: .remove)
+
+            group.cancelAll()
+        }
     }
 
     @Test func testErrorRetryCount() async throws {
@@ -225,14 +216,17 @@ struct RedisJobsTests {
             try await expectation.wait(count: 3)
             try await Task.sleep(for: .milliseconds(200))
 
-            let failedJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
-                of: jobQueue.queue.configuration.failedQueueKey,
-                withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
-            ).get()
+            let failedJobs = try await jobQueue.queue.valkeyClient.zcount(
+                jobQueue.queue.configuration.failedQueueKey,
+                min: 0,
+                max: .infinity
+            )
             #expect(failedJobs == 1)
 
-            let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.pendingQueueKey).get()
+            let pendingJobs = try await jobQueue.queue.valkeyClient.llen(jobQueue.queue.configuration.pendingQueueKey)
             #expect(pendingJobs == 0)
+
+            try await jobQueue.queue.cleanup(failedJobs: .remove)
         }
     }
 
@@ -263,14 +257,13 @@ struct RedisJobsTests {
             try await expectation.wait(count: 2)
             try await Task.sleep(for: .milliseconds(200))
 
-            let failedJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.failedQueueKey).get()
+            let failedJobs = try await jobQueue.queue.valkeyClient.llen(jobQueue.queue.configuration.failedQueueKey)
             #expect(failedJobs == 0)
 
-            let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.pendingQueueKey).get()
+            let pendingJobs = try await jobQueue.queue.valkeyClient.llen(jobQueue.queue.configuration.pendingQueueKey)
             #expect(pendingJobs == 0)
 
-            let processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey)
-                .get()
+            let processingJobs = try await jobQueue.queue.valkeyClient.llen(jobQueue.queue.configuration.processingQueueKey)
             #expect(processingJobs == 0)
         }
         #expect(currentJobTryCount.withLock { $0 } == 2)
@@ -312,11 +305,10 @@ struct RedisJobsTests {
             try await jobQueue.push(TestParameters())
             try await expectation.wait()
 
-            let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.pendingQueueKey).get()
+            let pendingJobs = try await jobQueue.queue.valkeyClient.llen(jobQueue.queue.configuration.pendingQueueKey)
             #expect(pendingJobs == 0)
-            let failedJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.failedQueueKey).get()
-            let processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey)
-                .get()
+            let failedJobs = try await jobQueue.queue.valkeyClient.llen(jobQueue.queue.configuration.failedQueueKey)
+            let processingJobs = try await jobQueue.queue.valkeyClient.llen(jobQueue.queue.configuration.processingQueueKey)
             #expect(failedJobs + processingJobs == 1)
         }
     }
@@ -342,6 +334,8 @@ struct RedisJobsTests {
             try await jobQueue.push(TestIntParameter(value: 2))
             try await jobQueue.push(TestStringParameter(value: "test"))
             try await expectation.wait()
+
+            try await jobQueue.queue.cleanup(failedJobs: .remove)
         }
         string.withLock {
             #expect($0 == "test")
@@ -433,15 +427,14 @@ struct RedisJobsTests {
             try await Task.sleep(for: .milliseconds(Int.random(in: 10..<50)))
             expectation.trigger()
         }
-        let redis = try createRedisConnectionPool(logger: logger)
-        let redisService = RedisConnectionPoolService(redis)
+        let valkey = ValkeyClient(.hostname(Self.valkeyHostname, port: 6379), logger: logger)
         let jobQueue = try await JobQueue(
-            RedisJobQueue(redis, configuration: .init(queueName: "testMultipleJobQueueHandlers"), logger: logger),
+            ValkeyJobQueue(valkey, configuration: .init(queueName: "testMultipleJobQueueHandlers"), logger: logger),
             logger: logger
         )
         jobQueue.registerJob(job)
         let jobQueue2 = try await JobQueue(
-            RedisJobQueue(redis, configuration: .init(queueName: "testMultipleJobQueueHandlers2"), logger: logger),
+            ValkeyJobQueue(valkey, configuration: .init(queueName: "testMultipleJobQueueHandlers2"), logger: logger),
             logger: logger
         )
         jobQueue2.registerJob(job)
@@ -450,7 +443,7 @@ struct RedisJobsTests {
             let serviceGroup = ServiceGroup(
                 configuration: .init(
                     services: [
-                        redisService,
+                        valkey,
                         jobQueue.processor(options: .init(numWorkers: 2)),
                         jobQueue2.processor(options: .init(numWorkers: 2)),
                     ],
@@ -484,7 +477,7 @@ struct RedisJobsTests {
         try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: #function)) { jobQueue in
             jobQueue.registerJob(parameters: TestParameters.self) { parameters, context in
                 context.logger.info("Parameters=\(parameters)")
-                _ = try await jobQueue.queue.redisConnectionPool.wrappedValue.scriptFlush(.sync).get()
+                _ = try await jobQueue.queue.valkeyClient.scriptFlush(flushType: .sync)
                 expectation.trigger()
             }
             try await jobQueue.push(TestParameters(value: 1))
@@ -502,10 +495,9 @@ struct RedisJobsTests {
         let jobProcessed: Mutex<[Int]> = .init([])
         var logger = Logger(label: #function)
         logger.logLevel = .trace
-        let redis = try createRedisConnectionPool(logger: logger)
-        let redisService = RedisConnectionPoolService(redis)
+        let valkey = ValkeyClient(.hostname(Self.valkeyHostname, port: 6379), logger: logger)
         let jobQueue = try await JobQueue(
-            .redis(redis, configuration: .init(queueName: "testCancelledJob", pollTime: .milliseconds(50)), logger: logger),
+            .valkey(valkey, configuration: .init(queueName: "testCancelledJob", pollTime: .milliseconds(50)), logger: logger),
             logger: logger
         )
         jobQueue.registerJob(
@@ -518,9 +510,12 @@ struct RedisJobsTests {
             expectation.trigger()
         }
         try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await jobQueue.queue.valkeyClient.run()
+            }
             let serviceGroup = ServiceGroup(
                 configuration: .init(
-                    services: [redisService, jobQueue.processor()],
+                    services: [jobQueue.processor()],
                     gracefulShutdownSignals: [.sigterm, .sigint],
                     logger: Logger(label: "JobQueueService")
                 )
@@ -536,7 +531,9 @@ struct RedisJobsTests {
             }
 
             try await expectation.wait()
+            try await jobQueue.queue.cleanup(processingJobs: .remove)
             await serviceGroup.triggerGracefulShutdown()
+            group.cancelAll()
         }
         #expect(jobProcessed.withLock { $0 } == [15])
     }
@@ -550,10 +547,9 @@ struct RedisJobsTests {
         let jobRunSequence: Mutex<[Int]> = .init([])
         var logger = Logger(label: #function)
         logger.logLevel = .trace
-        let redis = try createRedisConnectionPool(logger: logger)
-        let redisService = RedisConnectionPoolService(redis)
+        let valkey = ValkeyClient(.hostname(Self.valkeyHostname, port: 6379), logger: logger)
         let jobQueue = try await JobQueue(
-            .redis(redis, configuration: .init(queueName: "testPausedThenResume", pollTime: .milliseconds(50)), logger: logger),
+            .valkey(valkey, configuration: .init(queueName: "testPausedThenResume", pollTime: .milliseconds(50)), logger: logger),
             logger: logger
         )
         jobQueue.registerJob(
@@ -568,9 +564,12 @@ struct RedisJobsTests {
         }
 
         try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await jobQueue.queue.valkeyClient.run()
+            }
             let serviceGroup = ServiceGroup(
                 configuration: .init(
-                    services: [redisService, jobQueue.processor()],
+                    services: [jobQueue.processor()],
                     gracefulShutdownSignals: [.sigterm, .sigint],
                     logger: Logger(label: "JobQueueService")
                 )
@@ -587,7 +586,11 @@ struct RedisJobsTests {
             try await expectation.wait(count: 1)
             try await jobQueue.resumeJob(jobID: pausableJob)
             try await expectation.wait(count: 1)
+
+            try await jobQueue.queue.cleanup(processingJobs: .remove)
+
             await serviceGroup.triggerGracefulShutdown()
+            group.cancelAll()
         }
         #expect(jobRunSequence.withLock { $0 } == [30, 15])
     }
@@ -616,27 +619,30 @@ struct RedisJobsTests {
             try await expectation.wait(count: 3)
             try await Task.sleep(for: .milliseconds(200))
 
-            var completedJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
-                of: jobQueue.queue.configuration.completedQueueKey,
-                withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
-            ).get()
+            var completedJobsCount = try await jobQueue.queue.valkeyClient.zcount(
+                jobQueue.queue.configuration.completedQueueKey,
+                min: 0,
+                max: .infinity
+            )
             #expect(completedJobsCount == 3)
 
             // Remove completed task more than 10 seconds old ie none
             try await jobQueue.queue.cleanup(completedJobs: .remove(maxAge: .seconds(10)))
 
-            completedJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
-                of: jobQueue.queue.configuration.completedQueueKey,
-                withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
-            ).get()
+            completedJobsCount = try await jobQueue.queue.valkeyClient.zcount(
+                jobQueue.queue.configuration.completedQueueKey,
+                min: 0,
+                max: .infinity
+            )
             #expect(completedJobsCount == 3)
 
             try await jobQueue.queue.cleanup(completedJobs: .remove(maxAge: .seconds(0)))
 
-            completedJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
-                of: jobQueue.queue.configuration.completedQueueKey,
-                withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
-            ).get()
+            completedJobsCount = try await jobQueue.queue.valkeyClient.zcount(
+                jobQueue.queue.configuration.completedQueueKey,
+                min: 0,
+                max: .infinity
+            )
             #expect(completedJobsCount == 0)
         }
     }
@@ -649,32 +655,41 @@ struct RedisJobsTests {
         let jobName = JobName<Int>("testCancelledJobRetention")
         jobQueue.registerJob(name: jobName) { _, _ in }
 
-        try await jobQueue.queue.cleanup(
-            pendingJobs: .remove,
-            processingJobs: .remove,
-            completedJobs: .remove,
-            failedJobs: .remove,
-            cancelledJobs: .remove
-        )
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await jobQueue.queue.valkeyClient.run()
+            }
 
-        for _ in 0..<150 {
-            let jobId = try await jobQueue.push(jobName, parameters: 1)
-            try await jobQueue.cancelJob(jobID: jobId)
+            try await jobQueue.queue.cleanup(
+                pendingJobs: .remove,
+                processingJobs: .remove,
+                completedJobs: .remove,
+                failedJobs: .remove,
+                cancelledJobs: .remove
+            )
+
+            for _ in 0..<150 {
+                let jobId = try await jobQueue.push(jobName, parameters: 1)
+                try await jobQueue.cancelJob(jobID: jobId)
+            }
+
+            var cancelledJobsCount = try await jobQueue.queue.valkeyClient.zcount(
+                jobQueue.queue.configuration.cancelledQueueKey,
+                min: 0,
+                max: .infinity
+            )
+            #expect(cancelledJobsCount == 150)
+
+            try await jobQueue.queue.cleanup(cancelledJobs: .remove(maxAge: .seconds(0)))
+
+            cancelledJobsCount = try await jobQueue.queue.valkeyClient.zcount(
+                jobQueue.queue.configuration.cancelledQueueKey,
+                min: 0,
+                max: .infinity
+            )
+            #expect(cancelledJobsCount == 0)
+            group.cancelAll()
         }
-
-        var cancelledJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
-            of: jobQueue.queue.configuration.cancelledQueueKey,
-            withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
-        ).get()
-        #expect(cancelledJobsCount == 150)
-
-        try await jobQueue.queue.cleanup(cancelledJobs: .remove(maxAge: .seconds(0)))
-
-        cancelledJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
-            of: jobQueue.queue.configuration.cancelledQueueKey,
-            withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
-        ).get()
-        #expect(cancelledJobsCount == 0)
     }
 
     @Test func testCancelledJobRerun() async throws {
@@ -685,42 +700,55 @@ struct RedisJobsTests {
         let jobName = JobName<Int>("testCancelledJobRetention")
         jobQueue.registerJob(name: jobName) { _, _ in }
 
-        try await jobQueue.queue.cleanup(
-            pendingJobs: .remove,
-            processingJobs: .remove,
-            completedJobs: .remove,
-            failedJobs: .remove,
-            cancelledJobs: .remove
-        )
-        let jobId = try await jobQueue.push(jobName, parameters: 1)
-        let jobId2 = try await jobQueue.push(jobName, parameters: 2)
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await jobQueue.queue.valkeyClient.run()
+            }
+            try await jobQueue.queue.cleanup(
+                pendingJobs: .remove,
+                processingJobs: .remove,
+                completedJobs: .remove,
+                failedJobs: .remove,
+                cancelledJobs: .remove
+            )
+            let jobId = try await jobQueue.push(jobName, parameters: 1)
+            let jobId2 = try await jobQueue.push(jobName, parameters: 2)
 
-        try await jobQueue.cancelJob(jobID: jobId)
-        try await jobQueue.cancelJob(jobID: jobId2)
+            try await jobQueue.cancelJob(jobID: jobId)
+            try await jobQueue.cancelJob(jobID: jobId2)
 
-        var cancelledJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
-            of: jobQueue.queue.configuration.cancelledQueueKey,
-            withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
-        ).get()
-        #expect(cancelledJobsCount == 2)
-        var pendingJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
-            of: jobQueue.queue.configuration.pendingQueueKey,
-            withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
-        ).get()
-        #expect(pendingJobsCount == 0)
+            var cancelledJobsCount = try await jobQueue.queue.valkeyClient.zcount(
+                jobQueue.queue.configuration.cancelledQueueKey,
+                min: 0,
+                max: .infinity
+            )
+            #expect(cancelledJobsCount == 2)
+            var pendingJobsCount = try await jobQueue.queue.valkeyClient.zcount(
+                jobQueue.queue.configuration.pendingQueueKey,
+                min: 0,
+                max: .infinity
+            )
+            #expect(pendingJobsCount == 0)
 
-        try await jobQueue.queue.cleanup(cancelledJobs: .rerun)
+            try await jobQueue.queue.cleanup(cancelledJobs: .rerun)
 
-        cancelledJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
-            of: jobQueue.queue.configuration.cancelledQueueKey,
-            withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
-        ).get()
-        #expect(cancelledJobsCount == 0)
-        pendingJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
-            of: jobQueue.queue.configuration.pendingQueueKey,
-            withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
-        ).get()
-        #expect(pendingJobsCount == 2)
+            cancelledJobsCount = try await jobQueue.queue.valkeyClient.zcount(
+                jobQueue.queue.configuration.cancelledQueueKey,
+                min: 0,
+                max: .infinity
+            )
+            #expect(cancelledJobsCount == 0)
+            pendingJobsCount = try await jobQueue.queue.valkeyClient.zcount(
+                jobQueue.queue.configuration.pendingQueueKey,
+                min: 0,
+                max: .infinity
+            )
+            #expect(pendingJobsCount == 2)
+
+            try await jobQueue.queue.cleanup(pendingJobs: .remove, processingJobs: .remove)
+
+            group.cancelAll()
+        }
     }
 
     @Test func testCleanupProcessingJobs() async throws {
@@ -731,29 +759,35 @@ struct RedisJobsTests {
         let jobName = JobName<Int>("testCancelledJobRetention")
         jobQueue.registerJob(name: jobName) { _, _ in }
 
-        try await jobQueue.queue.cleanup(
-            pendingJobs: .remove,
-            processingJobs: .remove,
-            completedJobs: .remove,
-            failedJobs: .remove,
-            cancelledJobs: .remove
-        )
-        let jobID = try await jobQueue.push(jobName, parameters: 1)
-        let job = try await jobQueue.queue.popFirst()
-        #expect(jobID == job?.id)
-        _ = try await jobQueue.push(jobName, parameters: 1)
-        _ = try await jobQueue.queue.popFirst()
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await jobQueue.queue.valkeyClient.run()
+            }
+            try await jobQueue.queue.cleanup(
+                pendingJobs: .remove,
+                processingJobs: .remove,
+                completedJobs: .remove,
+                failedJobs: .remove,
+                cancelledJobs: .remove
+            )
+            let jobID = try await jobQueue.push(jobName, parameters: 1)
+            let job = try await jobQueue.queue.popFirst()
+            #expect(jobID == job?.id)
+            _ = try await jobQueue.push(jobName, parameters: 1)
+            _ = try await jobQueue.queue.popFirst()
 
-        var processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey).get()
-        #expect(processingJobs == 2)
+            var processingJobs = try await jobQueue.queue.valkeyClient.llen(jobQueue.queue.configuration.processingQueueKey)
+            #expect(processingJobs == 2)
 
-        try await jobQueue.queue.cleanup(processingJobs: .remove)
+            try await jobQueue.queue.cleanup(processingJobs: .remove)
 
-        processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey).get()
-        #expect(processingJobs == 0)
+            processingJobs = try await jobQueue.queue.valkeyClient.llen(jobQueue.queue.configuration.processingQueueKey)
+            #expect(processingJobs == 0)
 
-        let exists = try await jobQueue.queue.redisConnectionPool.wrappedValue.exists(jobID.redisKey(for: jobQueue.queue)).get()
-        #expect(exists == 0)
+            let exists = try await jobQueue.queue.valkeyClient.exists(keys: [jobID.valkeyKey(for: jobQueue.queue)])
+            #expect(exists == 0)
+            group.cancelAll()
+        }
     }
 
     @Test func testRerunProcessingJobs() async throws {
@@ -764,34 +798,43 @@ struct RedisJobsTests {
         let jobName = JobName<Int>("testCancelledJobRetention")
         jobQueue.registerJob(name: jobName) { _, _ in }
 
-        try await jobQueue.queue.cleanup(
-            pendingJobs: .remove,
-            processingJobs: .remove,
-            completedJobs: .remove,
-            failedJobs: .remove,
-            cancelledJobs: .remove
-        )
-        let jobID = try await jobQueue.push(jobName, parameters: 1)
-        let job = try await jobQueue.queue.popFirst()
-        #expect(jobID == job?.id)
-        _ = try await jobQueue.push(jobName, parameters: 1)
-        _ = try await jobQueue.queue.popFirst()
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await jobQueue.queue.valkeyClient.run()
+            }
+            try await jobQueue.queue.cleanup(
+                pendingJobs: .remove,
+                processingJobs: .remove,
+                completedJobs: .remove,
+                failedJobs: .remove,
+                cancelledJobs: .remove
+            )
+            let jobID = try await jobQueue.push(jobName, parameters: 1)
+            let job = try await jobQueue.queue.popFirst()
+            #expect(jobID == job?.id)
+            _ = try await jobQueue.push(jobName, parameters: 1)
+            _ = try await jobQueue.queue.popFirst()
 
-        var processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey).get()
-        #expect(processingJobs == 2)
+            var processingJobs = try await jobQueue.queue.valkeyClient.llen(jobQueue.queue.configuration.processingQueueKey)
+            #expect(processingJobs == 2)
 
-        try await jobQueue.queue.cleanup(processingJobs: .rerun)
+            try await jobQueue.queue.cleanup(processingJobs: .rerun)
 
-        processingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.llen(of: jobQueue.queue.configuration.processingQueueKey).get()
-        #expect(processingJobs == 0)
-        let pendingJobs = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
-            of: jobQueue.queue.configuration.pendingQueueKey,
-            withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
-        ).get()
-        #expect(pendingJobs == 2)
+            processingJobs = try await jobQueue.queue.valkeyClient.llen(jobQueue.queue.configuration.processingQueueKey)
+            #expect(processingJobs == 0)
+            let pendingJobs = try await jobQueue.queue.valkeyClient.zcount(
+                jobQueue.queue.configuration.pendingQueueKey,
+                min: 0,
+                max: .infinity
+            )
+            #expect(pendingJobs == 2)
 
-        let exists = try await jobQueue.queue.redisConnectionPool.wrappedValue.exists(jobID.redisKey(for: jobQueue.queue)).get()
-        #expect(exists == 1)
+            let exists = try await jobQueue.queue.valkeyClient.exists(keys: [jobID.valkeyKey(for: jobQueue.queue)])
+            #expect(exists == 1)
+
+            try await jobQueue.queue.cleanup(pendingJobs: .remove)
+            group.cancelAll()
+        }
     }
 
     @Test func testCleanupJob() async throws {
@@ -835,10 +878,11 @@ struct RedisJobsTests {
                 await iterator.next()
                 await iterator.next()
 
-                var failedJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
-                    of: jobQueue.queue.configuration.failedQueueKey,
-                    withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
-                ).get()
+                var failedJobsCount = try await jobQueue.queue.valkeyClient.zcount(
+                    jobQueue.queue.configuration.failedQueueKey,
+                    min: 0,
+                    max: .infinity
+                )
                 #expect(failedJobsCount == 3)
 
                 try await jobQueue.push(jobQueue.queue.cleanupJob, parameters: .init(failedJobs: .remove))
@@ -846,15 +890,19 @@ struct RedisJobsTests {
 
                 await iterator.next()
 
-                failedJobsCount = try await jobQueue.queue.redisConnectionPool.wrappedValue.zcount(
-                    of: jobQueue.queue.configuration.failedQueueKey,
-                    withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
-                ).get()
+                failedJobsCount = try await jobQueue.queue.valkeyClient.zcount(
+                    jobQueue.queue.configuration.failedQueueKey,
+                    min: 0,
+                    max: .infinity
+                )
                 #expect(failedJobsCount == 0)
-                failedJobsCount = try await jobQueue2.queue.redisConnectionPool.wrappedValue.zcount(
-                    of: jobQueue2.queue.configuration.failedQueueKey,
-                    withScoresBetween: (min: .inclusive(.zero), max: .inclusive(.infinity))
-                ).get()
+                failedJobsCount = try await jobQueue2.queue.valkeyClient.zcount(
+                    jobQueue2.queue.configuration.failedQueueKey,
+                    min: 0,
+                    max: .infinity
+                )
+
+                try await jobQueue2.queue.cleanup(failedJobs: .remove)
                 #expect(failedJobsCount == 1)
             }
         }
@@ -862,16 +910,22 @@ struct RedisJobsTests {
 
     @Test func testMetadata() async throws {
         let logger = Logger(label: #function)
-        let redis = try createRedisConnectionPool(logger: logger)
-        let jobQueue = try await RedisJobQueue(redis, logger: logger)
-        let value = ByteBuffer(string: "Testing metadata")
-        try await jobQueue.setMetadata(key: "test", value: value)
-        let metadata = try await jobQueue.getMetadata("test")
-        #expect(metadata == value)
-        let value2 = ByteBuffer(string: "Testing metadata again")
-        try await jobQueue.setMetadata(key: "test", value: value2)
-        let metadata2 = try await jobQueue.getMetadata("test")
-        #expect(metadata2 == value2)
+        let valkey = ValkeyClient(.hostname(Self.valkeyHostname, port: 6379), logger: logger)
+        let jobQueue = try await ValkeyJobQueue(valkey, logger: logger)
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await jobQueue.valkeyClient.run()
+            }
+            let value = ByteBuffer(string: "Testing metadata")
+            try await jobQueue.setMetadata(key: "test", value: value)
+            let metadata = try await jobQueue.getMetadata("test")
+            #expect(metadata == value)
+            let value2 = ByteBuffer(string: "Testing metadata again")
+            try await jobQueue.setMetadata(key: "test", value: value2)
+            let metadata2 = try await jobQueue.getMetadata("test")
+            #expect(metadata2 == value2)
+            group.cancelAll()
+        }
     }
 
     @Test func testMultipleQueueMetadata() async throws {
@@ -918,8 +972,8 @@ struct RedisJobsTests {
     }
 
     @Test func testMultipleQueueMetadataLock() async throws {
-        try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "queue1")) { jobQueue1 in
-            try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "queue2")) { jobQueue2 in
+        try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "testMultipleQueueMetadataLock1")) { jobQueue1 in
+            try await self.testJobQueue(numWorkers: 1, configuration: .init(queueName: "testMultipleQueueMetadataLock2")) { jobQueue2 in
                 let result1 = try await jobQueue1.queue.acquireLock(
                     key: "testMultipleQueueMetadataLock",
                     id: .init(string: "queue1"),
@@ -936,22 +990,5 @@ struct RedisJobsTests {
                 try await jobQueue2.queue.releaseLock(key: "testMultipleQueueMetadataLock", id: .init(string: "queue2"))
             }
         }
-    }
-}
-
-struct RedisConnectionPoolService: Service {
-    let pool: RedisConnectionPool
-
-    init(_ pool: RedisConnectionPool) {
-        self.pool = pool
-    }
-
-    public func run() async throws {
-        // Wait for graceful shutdown and ignore cancellation error
-        try? await gracefulShutdown()
-        // close connection pool
-        let promise = self.pool.eventLoop.makePromise(of: Void.self)
-        self.pool.close(promise: promise)
-        return try await promise.futureResult.get()
     }
 }

@@ -8,18 +8,18 @@
 <a href="https://swift.org">
   <img src="https://img.shields.io/badge/swift-5.9-brightgreen.svg"/>
 </a>
-<a href="https://github.com/hummingbird-project/swift-jobs-redis/actions?query=workflow%3ACI">
-  <img src="https://github.com/hummingbird-project/swift-jobs-redis/actions/workflows/ci.yml/badge.svg?branch=main"/>
+<a href="https://github.com/hummingbird-project/swift-jobs-valkey/actions?query=workflow%3ACI">
+  <img src="https://github.com/hummingbird-project/swift-jobs-valkey/actions/workflows/ci.yml/badge.svg?branch=main"/>
 </a>
 <a href="https://discord.gg/7ME3nZ7mP2">
   <img src="https://img.shields.io/badge/chat-discord-brightgreen.svg"/>
 </a>
 </p>
 
-# Redis driver for Jobs
+# Valkey/Redis driver for Jobs
 
-Redis is an open source, in-memory data structure store, used as a database, cache, and message broker.
+Valkey is an open source, in-memory data structure store, used as a database, cache, and message broker.
 
 ## Documentation
 
-Reference documentation for JobsRedis can be found [here](https://docs.hummingbird.codes/2.0/documentation/jobsredis)
+Reference documentation for JobsValkey can be found [here](https://docs.hummingbird.codes/2.0/documentation/jobsvalkey)

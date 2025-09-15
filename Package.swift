@@ -4,27 +4,27 @@
 import PackageDescription
 
 let package = Package(
-    name: "swift-jobs-redis",
+    name: "swift-jobs-valkey",
     platforms: [.macOS(.v15), .iOS(.v18), .tvOS(.v18)],
     products: [
-        .library(name: "JobsRedis", targets: ["JobsRedis"])
+        .library(name: "JobsValkey", targets: ["JobsValkey"])
     ],
     dependencies: [
         .package(url: "https://github.com/hummingbird-project/swift-jobs.git", from: "1.0.0-rc"),
-        .package(url: "https://github.com/swift-server/RediStack.git", from: "1.6.2"),
+        .package(url: "https://github.com/valkey-io/valkey-swift", from: "0.2.0"),
     ],
     targets: [
         .target(
-            name: "JobsRedis",
+            name: "JobsValkey",
             dependencies: [
                 .product(name: "Jobs", package: "swift-jobs"),
-                .product(name: "RediStack", package: "RediStack"),
+                .product(name: "Valkey", package: "valkey-swift"),
             ]
         ),
         .testTarget(
-            name: "JobsRedisTests",
+            name: "JobsValkeyTests",
             dependencies: [
-                .byName(name: "JobsRedis"),
+                .byName(name: "JobsValkey"),
                 .product(name: "Jobs", package: "swift-jobs"),
             ]
         ),
